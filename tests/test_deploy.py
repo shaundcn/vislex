@@ -96,6 +96,36 @@ class DeploymentArtifactTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("必须是 10/8", result.stderr)
 
+    def test_installer_rejects_root_container_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            self._write_fake_commands(fake_bin)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "HOME": str(root),
+                    "VISLEX_DIR": str(root / "vislex"),
+                    "APP_UID": "0",
+                    "APP_GID": "1000",
+                    "FAKE_COMPOSE": str(
+                        PROJECT_ROOT / "deploy" / "compose.yaml"
+                    ),
+                }
+            )
+            result = subprocess.run(
+                [str(PROJECT_ROOT / "deploy" / "install.sh")],
+                cwd=PROJECT_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("APP_UID 不能为 0", result.stderr)
+
     def _run_installer(self, environment: dict[str, str]):
         result = subprocess.run(
             [str(PROJECT_ROOT / "deploy" / "install.sh")],

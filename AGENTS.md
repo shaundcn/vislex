@@ -8,7 +8,7 @@
 ## 运行与验证
 
 - 启动：`zsh -lc 'docker compose up -d --build'`
-- 健康检查：`curl --fail http://127.0.0.1:8080/healthz`
+- 健康检查地址以本机 `.env` 的 `HOST_BIND_IP` 和 `HOST_PORT` 为准。
 - 编译与测试命令以 README“验证”一节为准。
 - 未经用户明确授权并提供可用 API Key，不得调用真实火山方舟模型或上传视频。
 
@@ -28,7 +28,10 @@
 
 ## 当前状态与下一步
 
-- 截至 2026-07-26，本地容器健康，编译及 41 项测试通过，现有 SQLite 架构已迁移。
-- 此仓库以当前 Vislex 视频应用为现役实现；旧法律应用只保留在 Git 历史中。
-- 远端目标是私有仓库 `shaundcn/vislex`。沿用正常提交历史，不得强推或重写历史。
+- 截至 2026-07-26，本地容器健康，编译及 45 项测试通过，现有 SQLite 架构已迁移。
+- GitHub 公开仓库为 `shaundcn/vislex`；当前历史只包含 Vislex 视频应用。
+- Docker Hub 公开镜像为 `shaundcn/vislex`，`1.0.0` 与 `latest` 均包含
+  `linux/amd64` 和 `linux/arm64`。
+- 在线安装入口和镜像式 Compose 位于 `deploy/`；默认安装仍必须绑定自动检测或显式指定的
+  私有局域网 IPv4，绝不回退到 `0.0.0.0`。
 - 后续修改先运行 README 中的验证，再按用户明确要求提交或推送。

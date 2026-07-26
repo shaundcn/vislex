@@ -157,6 +157,8 @@ assigned_ipv4 "$HOST_BIND_IP" || fail "HOST_BIND_IP 未分配给当前主机：$
 valid_port "$HOST_PORT" || fail "HOST_PORT 必须是 1 至 65535"
 valid_id "$APP_UID" || fail "APP_UID 必须是非负整数"
 valid_id "$APP_GID" || fail "APP_GID 必须是非负整数"
+[ "$APP_UID" -ne 0 ] || fail "APP_UID 不能为 0；请使用普通用户的 UID"
+[ "$APP_GID" -ne 0 ] || fail "APP_GID 不能为 0；请使用普通用户的 GID"
 valid_tag "$VISLEX_TAG" || fail "VISLEX_TAG 不是有效镜像标签"
 
 TRUSTED_HOSTS="127.0.0.1,localhost,${HOST_BIND_IP}"

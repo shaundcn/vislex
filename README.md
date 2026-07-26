@@ -240,7 +240,8 @@ docker compose --env-file .env -f compose.yaml down
 
 ## 局域网访问
 
-默认只绑定 `127.0.0.1`。局域网使用必须显式创建 `.env`，例如：
+源码 Compose 未配置 `.env` 时只绑定 `127.0.0.1`。局域网使用必须显式创建
+`.env`，例如：
 
 ```dotenv
 HOST_BIND_IP=192.168.31.65
@@ -278,13 +279,17 @@ zsh -lc 'docker run --rm vislex:local python -m compileall app'
 zsh -lc 'docker run --rm -v "$PWD:/workspace:ro" -w /workspace vislex:local python -m unittest discover -s tests -v'
 zsh -lc 'docker compose config'
 sh -n deploy/install.sh
-HOST_BIND_IP=192.168.31.65 TRUSTED_HOSTS=127.0.0.1,localhost,192.168.31.65 \
+HOST_BIND_IP=192.168.1.10 TRUSTED_HOSTS=127.0.0.1,localhost,192.168.1.10 \
   APP_UID="$(id -u)" APP_GID="$(id -g)" docker compose -f deploy/compose.yaml config
 zsh -lc 'docker compose up -d'
 zsh -lc 'docker compose ps'
-curl --fail --silent --show-error http://127.0.0.1:8080/healthz
-curl --fail --silent --show-error http://127.0.0.1:8080/ >/dev/null
-curl --fail --silent --show-error http://127.0.0.1:8080/settings >/dev/null
+set -a
+[ ! -f .env ] || . ./.env
+set +a
+VISLEX_URL="http://${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-8080}"
+curl --fail --silent --show-error "${VISLEX_URL}/healthz"
+curl --fail --silent --show-error "${VISLEX_URL}/" >/dev/null
+curl --fail --silent --show-error "${VISLEX_URL}/settings" >/dev/null
 ```
 
 ## 常见问题
