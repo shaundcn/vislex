@@ -2,21 +2,20 @@ name: vislex
 
 services:
   vislex:
-    image: vislex:local
-    build:
-      context: .
+    image: "docker.io/shaundcn/vislex:${VISLEX_TAG:-latest}"
+    pull_policy: always
     init: true
     restart: unless-stopped
-    user: "${APP_UID:-501}:${APP_GID:-20}"
+    user: "${APP_UID:?APP_UID is required}:${APP_GID:?APP_GID is required}"
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     ports:
-      - "${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-8080}:8000"
+      - "${HOST_BIND_IP:?HOST_BIND_IP is required}:${HOST_PORT:-8080}:8000"
     environment:
-      TRUSTED_HOSTS: "${TRUSTED_HOSTS:-127.0.0.1,localhost}"
+      TRUSTED_HOSTS: "${TRUSTED_HOSTS:?TRUSTED_HOSTS is required}"
       SCAN_INTERVAL_SECONDS: "30"
       FILE_STABLE_SECONDS: "60"
       MAX_VIDEO_SECONDS: "1800"

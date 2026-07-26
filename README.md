@@ -1,4 +1,4 @@
-# vislex
+# Vislex
 
 vislex 是一个只在本机或受信任局域网运行的 Docker 网页应用。它自动监控
 `input` 中稳定的视频，通过火山方舟 Files API 上传和预处理原视频，再用用户
@@ -6,6 +6,9 @@ vislex 是一个只在本机或受信任局域网运行的 Docker 网页应用�
 Markdown 平铺写入 `output`。
 
 本项目没有登录功能，不允许直接暴露到公网。
+
+公开镜像为 `docker.io/shaundcn/vislex`，支持 Linux amd64 和 arm64。Linux
+服务器可以只下载部署 YAML 后运行，不需要克隆源码仓库。
 
 ## 技术与限制
 
@@ -23,11 +26,14 @@ Markdown 平铺写入 `output`。
 .
 ├── app/                 FastAPI 应用、模板和样式
 ├── tests/               不调用真实模型的标准库测试
+├── deploy/              在线安装脚本和镜像式 Compose YAML
+├── .github/workflows/   Docker Hub 多架构发布工作流
 ├── input/               待处理视频（运行时创建，不纳入 Git）
 ├── output/              视频和 Markdown（运行时创建，不纳入 Git）
 ├── data/                SQLite 和 API Key（运行时创建，不纳入 Git）
 ├── Dockerfile
-└── docker-compose.yml
+├── docker-compose.yml   本地源码构建
+└── LICENSE
 ```
 
 Compose 使用以下固定挂载：
@@ -41,7 +47,46 @@ Compose 使用以下固定挂载：
 启动不会清空、迁移或覆盖这三个目录中的已有内容。`docker compose down` 也不要附加
 `-v`；这里使用的是绑定目录而不是命名卷。
 
-## 启动
+## Linux 在线安装
+
+要求目标 Linux 已安装 Docker Engine、Docker Compose v2、`curl` 和 `iproute2`。
+下面一条命令会把部署文件保存到 `~/vislex`，自动检测默认路由使用的私有局域网
+IPv4，创建三个空缺的数据目录，拉取公开镜像并等待健康检查：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/install.sh | sh
+```
+
+脚本只下载部署文件，不克隆源码。默认从外部端口 `8080` 访问：
+
+```text
+http://目标Linux的局域网IP:8080/
+```
+
+自动检测不合适时，可以明确指定地址、端口、版本或安装目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/install.sh \
+  | HOST_BIND_IP=192.168.31.100 HOST_PORT=8080 VISLEX_TAG=1.0.0 VISLEX_DIR="$HOME/vislex" sh
+```
+
+安装脚本只接受分配给当前 Linux 主机的 `10/8`、`172.16/12` 或 `192.168/16`
+地址，拒绝 `0.0.0.0`。第一次运行会创建权限为 `0600` 的 `.env`；后续运行保留
+已有 `.env`、`input`、`output` 和 `data`。命令行显式提供的变量只覆盖本次运行，
+如需永久修改请编辑 `~/vislex/.env`。
+
+镜像式 Compose YAML 的公开地址是：
+
+```text
+https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose.yaml
+```
+
+在 Portainer、1Panel 等界面粘贴 YAML 时，必须同时提供
+`HOST_BIND_IP`、`TRUSTED_HOSTS`、`APP_UID` 和 `APP_GID`，并提前创建与
+Compose 项目目录相对的 `input/output/data`。不要把 `HOST_BIND_IP` 设置为
+`0.0.0.0`。
+
+## 从源码启动
 
 Docker Desktop 用户级 CLI 未进入当前 PATH 时，请使用登录 shell：
 
@@ -164,12 +209,42 @@ zsh -lc 'docker compose start'
 
 不要单独复制正在写入的 SQLite 主文件而遗漏同目录的 WAL 文件。
 
+## 在线安装的更新、回滚与卸载
+
+更新到最新公开镜像时重新运行安装命令，或在安装目录执行：
+
+```bash
+cd "$HOME/vislex"
+docker compose --env-file .env -f compose.yaml pull
+docker compose --env-file .env -f compose.yaml up -d
+```
+
+固定或回滚到首个稳定版本：
+
+```bash
+sed -i.bak 's/^VISLEX_TAG=.*/VISLEX_TAG=1.0.0/' "$HOME/vislex/.env"
+cd "$HOME/vislex"
+docker compose --env-file .env -f compose.yaml pull
+docker compose --env-file .env -f compose.yaml up -d
+```
+
+停止并删除容器但保留视频、Markdown、数据库和设置：
+
+```bash
+cd "$HOME/vislex"
+docker compose --env-file .env -f compose.yaml down
+```
+
+不要给 `down` 添加 `-v`，也不要删除 `~/vislex/input`、`output` 或 `data`，
+除非已经单独备份并明确希望删除这些数据。
+
 ## 局域网访问
 
 默认只绑定 `127.0.0.1`。局域网使用必须显式创建 `.env`，例如：
 
 ```dotenv
 HOST_BIND_IP=192.168.31.65
+HOST_PORT=8080
 TRUSTED_HOSTS=127.0.0.1,localhost,192.168.31.65
 APP_UID=501
 APP_GID=20
@@ -200,8 +275,11 @@ id -g
 ```bash
 zsh -lc 'docker compose build'
 zsh -lc 'docker run --rm vislex:local python -m compileall app'
-zsh -lc 'docker run --rm -v "$PWD/tests:/app/tests:ro" vislex:local python -m unittest discover -s tests -v'
+zsh -lc 'docker run --rm -v "$PWD:/workspace:ro" -w /workspace vislex:local python -m unittest discover -s tests -v'
 zsh -lc 'docker compose config'
+sh -n deploy/install.sh
+HOST_BIND_IP=192.168.31.65 TRUSTED_HOSTS=127.0.0.1,localhost,192.168.31.65 \
+  APP_UID="$(id -u)" APP_GID="$(id -g)" docker compose -f deploy/compose.yaml config
 zsh -lc 'docker compose up -d'
 zsh -lc 'docker compose ps'
 curl --fail --silent --show-error http://127.0.0.1:8080/healthz
@@ -212,6 +290,8 @@ curl --fail --silent --show-error http://127.0.0.1:8080/settings >/dev/null
 ## 常见问题
 
 - `docker-credential-desktop` 找不到：使用 `zsh -lc 'docker compose ...'`。
+- `docker compose -f https://...` 把 URL 当成本地路径：使用上面的在线安装命令；
+  它会先下载并验证 YAML。
 - 容器提示 `Permission denied`：检查 `.env` 中 `APP_UID`、`APP_GID` 是否与宿主用户
   一致，并确认三个绑定目录可写。
 - 任务一直排队：先保存 Key、获取模型并保存模型/FPS。
