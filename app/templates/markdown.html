@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ video_filename }} · 预览 · vislex{% endblock %}
+{% block content %}
+<section class="panel preview-panel">
+  <div class="panel-heading">
+    <div class="preview-title">
+      <h1>{{ video_filename }}</h1>
+      <p>{{ markdown_filename }}</p>
+    </div>
+    <a class="button secondary" href="/">返回任务</a>
+  </div>
+  <div class="preview-layout">
+    <section class="preview-pane video-preview-pane" aria-labelledby="video-preview-title">
+      <div class="preview-pane-heading">
+        <h2 id="video-preview-title">视频预览</h2>
+        <a class="button secondary small" href="/tasks/{{ task_id }}/video" target="_blank" rel="noopener">全屏播放</a>
+      </div>
+      <div class="video-frame">
+        <video class="preview-video" controls preload="metadata">
+          <source src="/tasks/{{ task_id }}/video" type="{{ video_content_type }}">
+          当前浏览器不支持视频播放。
+        </video>
+      </div>
+    </section>
+    <section class="preview-pane markdown-preview-pane" aria-labelledby="markdown-preview-title">
+      <h2 id="markdown-preview-title">Markdown 预览</h2>
+      <pre class="markdown-preview">{{ markdown_text }}</pre>
+    </section>
+  </div>
+</section>
+{% endblock %}

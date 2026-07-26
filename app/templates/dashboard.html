@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}任务 · vislex{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="8">{% endblock %}
+{% block content %}
+<section class="stats" aria-label="任务统计">
+  <article><span>成功</span><strong>{{ cards.success }}</strong></article>
+  <article><span>失败</span><strong>{{ cards.failed }}</strong></article>
+  <article><span>排队中</span><strong>{{ cards.queued }}</strong></article>
+  <article><span>处理中</span><strong>{{ cards.processing }}</strong></article>
+  <article><span>已忽略</span><strong>{{ cards.ignored }}</strong></article>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h1>任务</h1>
+    <div class="toolbar">
+      <form method="post" action="/actions/scan">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="secondary" type="submit">立即扫描</button>
+      </form>
+      <details class="status-menu">
+        <summary>状态：{{ status_labels[selected_status] if selected_status else '全部' }}</summary>
+        <div class="status-options">
+          <a href="/">全部</a>
+          {% for option in status_options %}
+          <a href="/?status={{ option }}" {% if selected_status == option %}aria-current="true"{% endif %}>{{ status_labels[option] }}</a>
+          {% endfor %}
+        </div>
+      </details>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="task-table">
+      <colgroup>
+        <col class="filename-column">
+        <col class="status-column">
+        <col class="datetime-column">
+        <col class="actions-column">
+      </colgroup>
+      <thead>
+        <tr><th>原文件</th><th>状态</th><th>更新时间</th><th>操作</th></tr>
+      </thead>
+      <tbody>
+      {% for task in tasks %}
+        <tr>
+          <td class="filename-cell">
+            <span>{{ task.original_name }}</span>
+            {% if task.error %}
+            <details class="error-detail">
+              <summary>查看信息</summary>
+              <p>{{ task.error }}</p>
+            </details>
+            {% endif %}
+          </td>
+          <td><span class="badge status-{{ task.status }}">{{ status_labels[task.status] }}</span></td>
+          <td class="datetime-cell">
+            <span>{{ task.updated_date }}</span>
+            <span>{{ task.updated_clock }}</span>
+          </td>
+          <td>
+              <div class="row-actions">
+              {% if task.status == 'failed' %}
+              <form method="post" action="/tasks/{{ task.id }}/retry">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="small" type="submit">重试</button>
+              </form>
+              {% endif %}
+              {% if task.status == 'success' %}
+              <a class="button small" href="/tasks/{{ task.id }}/preview" target="_blank" rel="noopener">预览</a>
+              <a class="button secondary small" href="/tasks/{{ task.id }}/video/download" download>下载视频</a>
+              <a class="button secondary small" href="/tasks/{{ task.id }}/markdown/download" download>下载MD</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td class="empty" colspan="4">暂无任务。将视频放入 input，文件稳定60秒后会自动入队。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if page_total > 1 %}
+  <nav class="pagination" aria-label="任务分页">
+    {% if previous_page_url %}
+    <a class="button secondary small" href="{{ previous_page_url }}">上一页</a>
+    {% else %}
+    <span class="button secondary small disabled" aria-disabled="true">上一页</span>
+    {% endif %}
+    <span class="page-indicator">第 {{ current_page }} / {{ page_total }} 页，共 {{ task_total }} 项</span>
+    {% if next_page_url %}
+    <a class="button secondary small" href="{{ next_page_url }}">下一页</a>
+    {% else %}
+    <span class="button secondary small disabled" aria-disabled="true">下一页</span>
+    {% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}

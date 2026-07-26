@@ -1,0 +1,40 @@
+name: vislex
+
+services:
+  vislex:
+    image: vislex:local
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    user: "${APP_UID:-501}:${APP_GID:-20}"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "${HOST_BIND_IP:-127.0.0.1}:8080:8000"
+    environment:
+      TRUSTED_HOSTS: "${TRUSTED_HOSTS:-127.0.0.1,localhost}"
+      SCAN_INTERVAL_SECONDS: "30"
+      FILE_STABLE_SECONDS: "60"
+      MAX_VIDEO_SECONDS: "1800"
+      MAX_VIDEO_BYTES: "500000000"
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./data:/app/data
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    stop_grace_period: 30s

@@ -1,0 +1,10 @@
+.git
+.env
+__pycache__
+*.py[cod]
+data
+input
+output
+video
+tests
+.DS_Store

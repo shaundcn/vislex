@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}vislex{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <div class="nav-wrap">
+      <a class="brand" href="/">vislex</a>
+      <nav aria-label="主导航">
+        <a href="/" {% if request.url.path == '/' %}aria-current="page"{% endif %}>任务</a>
+        <a href="/settings" {% if request.url.path == '/settings' %}aria-current="page"{% endif %}>设置</a>
+      </nav>
+    </div>
+  </header>
+  <main class="page">
+    {% if notice %}<div class="message success-message" role="status">{{ notice }}</div>{% endif %}
+    {% if error %}<div class="message error-message" role="alert">{{ error }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

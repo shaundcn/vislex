@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}设置 · vislex{% endblock %}
+{% block content %}
+<section class="panel settings-panel">
+  <form method="post" class="settings-columns">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <section class="settings-column" aria-labelledby="key-title">
+      <h1 id="key-title">API Key</h1>
+      {% if api_key_masked %}
+      <p class="masked-key">已保存：<code>{{ api_key_masked }}</code></p>
+      {% else %}
+      <p class="help">尚未保存 API Key</p>
+      {% endif %}
+      <label for="api_key">新 API Key</label>
+      <input id="api_key" name="api_key" type="password" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="留空时测试使用已保存的 Key">
+      <div class="form-actions">
+        <button class="secondary" type="submit" formaction="/settings/api-key/test">测试</button>
+        <button type="submit" formaction="/settings/api-key/save" formnovalidate>保存</button>
+      </div>
+    </section>
+
+    <section class="settings-column" aria-labelledby="model-title">
+      <h1 id="model-title">模型与抽帧</h1>
+      <label for="model_id">模型</label>
+      <select id="model_id" name="model_id" required>
+        <option value="" {% if not selected_model %}selected{% endif %} disabled>请选择模型</option>
+        {% for model in models %}
+        <option value="{{ model }}" {% if model == selected_model %}selected{% endif %}>{{ model }}</option>
+        {% endfor %}
+      </select>
+      <label for="video_fps">抽帧频率（FPS）</label>
+      <input id="video_fps" name="video_fps" type="number" min="0.2" max="5" step="0.1" value="{{ video_fps }}" required>
+      <p class="help">范围 0.2–5，默认 0.3。模型列表不按能力过滤。</p>
+      {% if models_updated_at %}<p class="help">模型缓存：{{ models_updated_at }}</p>{% endif %}
+      <div class="form-actions">
+        <button class="secondary" type="submit" formaction="/settings/models/fetch" formnovalidate>获取模型</button>
+        <button type="submit" formaction="/settings/model/save">保存设置</button>
+      </div>
+    </section>
+  </form>
+</section>
+
+<section class="panel prompt-panel">
+  <h1>模型提示词</h1>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="visually-hidden" for="prompt">模型提示词</label>
+    <textarea id="prompt" name="prompt" maxlength="40000" spellcheck="false" required>{{ prompt }}</textarea>
+    <p class="help">任务被领取时会保存提示词、模型和 FPS 快照。</p>
+    <div class="form-actions">
+      <button class="secondary" type="submit" formaction="/settings/prompt/reset" formnovalidate>恢复默认</button>
+      <button type="submit" formaction="/settings/prompt/save">保存提示词</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
