@@ -47,44 +47,40 @@ Compose 使用以下固定挂载：
 启动不会清空、迁移或覆盖这三个目录中的已有内容。`docker compose down` 也不要附加
 `-v`；这里使用的是绑定目录而不是命名卷。
 
-## Linux 在线安装
+## NAS 与 Linux YAML 安装
 
-要求目标 Linux 已安装 Docker Engine、Docker Compose v2、`curl` 和 `iproute2`。
-下面一条命令会把部署文件保存到 `~/vislex`，自动检测默认路由使用的私有局域网
-IPv4，创建三个空缺的数据目录，拉取公开镜像并等待健康检查：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/install.sh | sh
-```
-
-脚本只下载部署文件，不克隆源码。默认从外部端口 `8080` 访问：
-
-```text
-http://目标Linux的局域网IP:8080/
-```
-
-自动检测不合适时，可以明确指定地址、端口、版本或安装目录：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/install.sh \
-  | HOST_BIND_IP=192.168.31.100 HOST_PORT=8080 VISLEX_TAG=1.0.0 VISLEX_DIR="$HOME/vislex" sh
-```
-
-安装脚本只接受分配给当前 Linux 主机的 `10/8`、`172.16/12` 或 `192.168/16`
-地址，拒绝 `0.0.0.0`。第一次运行会创建权限为 `0600` 的 `.env`；后续运行保留
-已有 `.env`、`input`、`output` 和 `data`。命令行显式提供的变量只覆盖本次运行，
-如需永久修改请编辑 `~/vislex/.env`。
-
-镜像式 Compose YAML 的公开地址是：
+飞牛 OS、Portainer、1Panel 或其他支持 Docker Compose 的 NAS 可以直接使用下面的
+公开 YAML，不需要克隆源码，也不要求填写 NAS IP：
 
 ```text
 https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose.yaml
 ```
 
-在 Portainer、1Panel 等界面粘贴 YAML 时，必须同时提供
-`HOST_BIND_IP`、`TRUSTED_HOSTS`、`APP_UID` 和 `APP_GID`，并提前创建与
-Compose 项目目录相对的 `input/output/data`。不要把 `HOST_BIND_IP` 设置为
-`0.0.0.0`。
+默认端口为 `8080`，默认数据目录是 Compose 项目目录下的
+`input/output/data`。可以直接修改 YAML 左侧端口和挂载路径，也可以设置：
+
+```dotenv
+HOST_PORT=8080
+VISLEX_TAG=latest
+VISLEX_INPUT_DIR=/你的路径/vislex/input
+VISLEX_OUTPUT_DIR=/你的路径/vislex/output
+VISLEX_DATA_DIR=/你的路径/vislex/data
+```
+
+部署前创建三个目录，并确保镜像内置用户 `10001:10001` 有写权限。命令行安装示例：
+
+```bash
+mkdir -p "$HOME/vislex"/input "$HOME/vislex"/output "$HOME/vislex"/data
+cd "$HOME/vislex"
+curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose.yaml \
+  -o compose.yaml
+docker compose -f compose.yaml up -d
+```
+
+访问地址为 `http://NAS局域网IP:8080/`。这个简化 YAML 不限定监听 IP，并设置
+`TRUSTED_HOSTS="*"`；只能用于可信局域网，禁止公网端口转发或公开反向代理。
+按简化部署要求，它不包含自动拉取、自动重启、健康检查、只读根文件系统或额外容器
+安全限制。NAS 重启后可能需要手动启动项目，镜像更新也需要手动执行下文命令。
 
 ## 从源码启动
 
@@ -209,30 +205,30 @@ zsh -lc 'docker compose start'
 
 不要单独复制正在写入的 SQLite 主文件而遗漏同目录的 WAL 文件。
 
-## 在线安装的更新、回滚与卸载
+## YAML 安装的更新、回滚与卸载
 
-更新到最新公开镜像时重新运行安装命令，或在安装目录执行：
+更新到最新公开镜像：
 
 ```bash
 cd "$HOME/vislex"
-docker compose --env-file .env -f compose.yaml pull
-docker compose --env-file .env -f compose.yaml up -d
+docker compose -f compose.yaml pull
+docker compose -f compose.yaml up -d
 ```
 
-固定或回滚到首个稳定版本：
+固定或回滚到首个稳定版本时，在 Compose 项目目录创建 `.env`：
 
 ```bash
-sed -i.bak 's/^VISLEX_TAG=.*/VISLEX_TAG=1.0.0/' "$HOME/vislex/.env"
 cd "$HOME/vislex"
-docker compose --env-file .env -f compose.yaml pull
-docker compose --env-file .env -f compose.yaml up -d
+printf 'VISLEX_TAG=1.0.0\n' > .env
+docker compose -f compose.yaml pull
+docker compose -f compose.yaml up -d
 ```
 
 停止并删除容器但保留视频、Markdown、数据库和设置：
 
 ```bash
 cd "$HOME/vislex"
-docker compose --env-file .env -f compose.yaml down
+docker compose -f compose.yaml down
 ```
 
 不要给 `down` 添加 `-v`，也不要删除 `~/vislex/input`、`output` 或 `data`，
@@ -279,8 +275,7 @@ zsh -lc 'docker run --rm vislex:local python -m compileall app'
 zsh -lc 'docker run --rm -v "$PWD:/workspace:ro" -w /workspace vislex:local python -m unittest discover -s tests -v'
 zsh -lc 'docker compose config'
 sh -n deploy/install.sh
-HOST_BIND_IP=192.168.1.10 TRUSTED_HOSTS=127.0.0.1,localhost,192.168.1.10 \
-  APP_UID="$(id -u)" APP_GID="$(id -g)" docker compose -f deploy/compose.yaml config
+docker compose -f deploy/compose.yaml config
 zsh -lc 'docker compose up -d'
 zsh -lc 'docker compose ps'
 set -a
@@ -295,12 +290,12 @@ curl --fail --silent --show-error "${VISLEX_URL}/settings" >/dev/null
 ## 常见问题
 
 - `docker-credential-desktop` 找不到：使用 `zsh -lc 'docker compose ...'`。
-- `docker compose -f https://...` 把 URL 当成本地路径：使用上面的在线安装命令；
-  它会先下载并验证 YAML。
-- 容器提示 `Permission denied`：检查 `.env` 中 `APP_UID`、`APP_GID` 是否与宿主用户
-  一致，并确认三个绑定目录可写。
+- `docker compose -f https://...` 把 URL 当成本地路径：先下载 YAML，或在 NAS 的
+  Compose 页面直接粘贴。
+- 容器提示 `Permission denied`：确认三个映射目录允许镜像内置用户
+  `10001:10001` 写入。
 - 任务一直排队：先保存 Key、获取模型并保存模型/FPS。
 - 模型出现在列表但任务失败：列表不做能力过滤，请在设置页使用“测试”确认所选模型
   支持视频 Files + Responses。
-- `Invalid host header`：将实际访问 IP 或域名加入 `.env` 的
-  `TRUSTED_HOSTS`，不要使用通配符开放公网。
+- 源码 Compose 出现 `Invalid host header`：将实际访问 IP 或域名加入 `.env` 的
+  `TRUSTED_HOSTS`。NAS 简化 YAML 已使用通配符，因此绝不能开放到公网。

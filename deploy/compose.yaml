@@ -3,37 +3,13 @@ name: vislex
 services:
   vislex:
     image: "docker.io/shaundcn/vislex:${VISLEX_TAG:-latest}"
-    pull_policy: always
+    container_name: vislex
     init: true
-    restart: unless-stopped
-    user: "${APP_UID:?APP_UID is required}:${APP_GID:?APP_GID is required}"
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     ports:
-      - "${HOST_BIND_IP:?HOST_BIND_IP is required}:${HOST_PORT:-8080}:8000"
+      - "${HOST_PORT:-8080}:8000"
     environment:
-      TRUSTED_HOSTS: "${TRUSTED_HOSTS:?TRUSTED_HOSTS is required}"
-      SCAN_INTERVAL_SECONDS: "30"
-      FILE_STABLE_SECONDS: "60"
-      MAX_VIDEO_SECONDS: "1800"
-      MAX_VIDEO_BYTES: "500000000"
+      TRUSTED_HOSTS: "*"
     volumes:
-      - ./input:/app/input
-      - ./output:/app/output
-      - ./data:/app/data
-    tmpfs:
-      - /tmp:size=128m,mode=1777
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
-      interval: 10s
-      timeout: 5s
-      start_period: 15s
-      retries: 5
-    stop_grace_period: 30s
+      - "${VISLEX_INPUT_DIR:-./input}:/app/input"
+      - "${VISLEX_OUTPUT_DIR:-./output}:/app/output"
+      - "${VISLEX_DATA_DIR:-./data}:/app/data"

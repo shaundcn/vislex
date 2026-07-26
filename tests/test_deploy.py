@@ -12,16 +12,29 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentArtifactTests(unittest.TestCase):
-    def test_deploy_compose_uses_only_the_public_image(self):
+    def test_deploy_compose_is_the_minimal_nas_variant(self):
         compose = (PROJECT_ROOT / "deploy" / "compose.yaml").read_text(
             encoding="utf-8"
         )
         self.assertIn("docker.io/shaundcn/vislex:", compose)
-        self.assertIn("pull_policy: always", compose)
-        self.assertIn("${HOST_BIND_IP:?", compose)
-        self.assertIn("${TRUSTED_HOSTS:?", compose)
+        self.assertIn('${HOST_PORT:-8080}:8000', compose)
+        self.assertIn('TRUSTED_HOSTS: "*"', compose)
+        self.assertIn("${VISLEX_INPUT_DIR:-./input}", compose)
+        self.assertIn("${VISLEX_OUTPUT_DIR:-./output}", compose)
+        self.assertIn("${VISLEX_DATA_DIR:-./data}", compose)
+        self.assertIn("init: true", compose)
         self.assertNotIn("\n    build:", compose)
-        self.assertNotIn("0.0.0.0:", compose)
+        for removed_option in (
+            "pull_policy:",
+            "restart:",
+            "\n    user:",
+            "read_only:",
+            "security_opt:",
+            "cap_drop:",
+            "tmpfs:",
+            "healthcheck:",
+        ):
+            self.assertNotIn(removed_option, compose)
 
     def test_installer_is_idempotent_and_preserves_data(self):
         with tempfile.TemporaryDirectory() as temporary:
