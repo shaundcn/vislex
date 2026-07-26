@@ -1,0 +1,154 @@
+name: Docker image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "deploy/**"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "requirements.txt"
+      - "LICENSE"
+      - ".github/workflows/docker-publish.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag without the v prefix, for example 1.0.1"
+        required: true
+        type: string
+      publish_latest:
+        description: "Also update the latest tag"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate shell and Compose files
+        env:
+          HOST_BIND_IP: 192.168.1.10
+          HOST_PORT: "8080"
+          TRUSTED_HOSTS: 127.0.0.1,localhost,192.168.1.10
+          APP_UID: "1000"
+          APP_GID: "1000"
+          VISLEX_TAG: latest
+        run: |
+          sh -n deploy/install.sh
+          docker compose config
+          docker compose -f deploy/compose.yaml config
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: vislex:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Compile and run unit tests
+        run: |
+          docker run --rm vislex:test python -m compileall app
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -w /workspace \
+            vislex:test \
+            python -m unittest discover -s tests -v
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs:
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: release
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+          DISPATCH_LATEST: ${{ inputs.publish_latest }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            publish_latest=true
+          else
+            version="$DISPATCH_VERSION"
+            publish_latest="$DISPATCH_LATEST"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use X.Y.Z format" >&2
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "publish_latest=$publish_latest" >>"$GITHUB_OUTPUT"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: shaundcn
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Refuse to overwrite a fixed version
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if docker buildx imagetools inspect "docker.io/shaundcn/vislex:${VERSION}" >/dev/null 2>&1; then
+            echo "docker.io/shaundcn/vislex:${VERSION} already exists" >&2
+            exit 1
+          fi
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: docker.io/shaundcn/vislex
+          tags: |
+            type=raw,value=${{ steps.release.outputs.version }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.publish_latest == 'true' }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+
+      - name: Build and push multi-platform image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            VISLEX_VERSION=${{ steps.release.outputs.version }}
+            VISLEX_REVISION=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
