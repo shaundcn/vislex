@@ -8,7 +8,9 @@ Markdown 平铺写入 `output`。
 本项目没有登录功能，不允许直接暴露到公网。
 
 公开镜像为 `docker.io/shaundcn/vislex`，支持 Linux amd64 和 arm64。Linux
-服务器可以只下载部署 YAML 后运行，不需要克隆源码仓库。
+服务器可以只下载部署 YAML 运行，不需要克隆源码仓库。
+
+当前源码版本：`1.1.0`。Docker Hub 稳定版本：`1.1.0`。
 
 ## 技术与限制
 
@@ -50,7 +52,7 @@ Compose 使用以下固定挂载：
 ## NAS 与 Linux YAML 安装
 
 飞牛 OS、Portainer、1Panel 或其他支持 Docker Compose 的 NAS 可以直接使用下面的
-公开 YAML，不需要克隆源码，也不要求填写 NAS IP：
+公开 YAML，不需要克隆源码：
 
 ```text
 https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose.yaml
@@ -60,27 +62,65 @@ https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose.yaml
 `input/output/data`。可以直接修改 YAML 左侧端口和挂载路径，也可以设置：
 
 ```dotenv
+HOST_BIND_IP=192.168.1.20
 HOST_PORT=8080
+TRUSTED_HOSTS=127.0.0.1,localhost,192.168.1.20
 VISLEX_TAG=latest
+PUID=1000
+PGID=1000
 VISLEX_INPUT_DIR=/你的路径/vislex/input
 VISLEX_OUTPUT_DIR=/你的路径/vislex/output
 VISLEX_DATA_DIR=/你的路径/vislex/data
 ```
 
-部署前创建三个目录，并确保镜像内置用户 `10001:10001` 有写权限。命令行安装示例：
+`HOST_BIND_IP` 必须是 NAS 自己的私有局域网 IPv4。在线安装脚本会自动检测该地址；
+直接在 NAS 的 Compose 页面粘贴 YAML 时需要显式填写。默认值为 `127.0.0.1`，不会
+把没有登录功能的服务意外监听到全部网络接口。
+
+`PUID`、`PGID` 应填写拥有这些映射目录的 NAS 用户数字 UID/GID；常见首位用户是
+`1000:1000`，但不同 NAS 可能不同，可用 `id` 确认。镜像启动时会把三个挂载目录本身
+以及已有的 Vislex 数据库/API Key 调整给该身份，随后立即降权运行；不会递归修改
+`input` 中的视频或 `output` 中的已有归档。
+
+一条命令在线安装会自动检测局域网 IP、创建但不清空数据目录并保存设置：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/install.sh | sh
+```
+
+需要自定义端口、运行身份或映射目录时：
+
+```bash
+HOST_PORT=8080 \
+PUID="$(id -u)" \
+PGID="$(id -g)" \
+VISLEX_INPUT_DIR="/你的路径/input" \
+VISLEX_OUTPUT_DIR="/你的路径/output" \
+VISLEX_DATA_DIR="/你的路径/data" \
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/install.sh)"
+```
+
+也可以手动下载 YAML：
 
 ```bash
 mkdir -p "$HOME/vislex"/input "$HOME/vislex"/output "$HOME/vislex"/data
 cd "$HOME/vislex"
 curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose.yaml \
   -o compose.yaml
+printf '%s\n' \
+  'HOST_BIND_IP=192.168.1.20' \
+  'TRUSTED_HOSTS=127.0.0.1,localhost,192.168.1.20' > .env
 docker compose -f compose.yaml up -d
 ```
 
-访问地址为 `http://NAS局域网IP:8080/`。这个简化 YAML 不限定监听 IP，并设置
-`TRUSTED_HOSTS="*"`；只能用于可信局域网，禁止公网端口转发或公开反向代理。
-按简化部署要求，它不包含自动拉取、自动重启、健康检查、只读根文件系统或额外容器
-安全限制。NAS 重启后可能需要手动启动项目，镜像更新也需要手动执行下文命令。
+访问地址为 `http://NAS局域网IP:8080/`。这个简化 YAML 只用于可信局域网，禁止
+公网端口转发或公开反向代理。按简化部署要求，它不包含自动拉取、自动重启、健康检查、
+只读根文件系统或额外容器安全限制。NAS 重启后可能需要手动启动项目，镜像更新也需要
+手动执行下文命令。
+
+`PUID=0`、`PGID=0` 可用于确认权限问题，但会让应用和 FFmpeg 持续以 root 身份
+运行，不建议作为长期配置。只设置同名环境变量对不支持它们的镜像没有作用；Vislex
+镜像的入口程序会实际读取并应用这两个值。
 
 ## 从源码启动
 
@@ -119,8 +159,10 @@ API Key 原子写入 `data/ark_api_key` 并设置为 `0600`。网页只展示首
 
 ## 自动处理
 
-扫描器每30秒检查 `input` 顶层的非隐藏普通文件。文件大小和纳秒修改时间连续60秒不变
-后建立任务。目录和符号链接不会被跟随。
+源码 `1.1.0` 的扫描器每30秒检查 `input` 顶层及最多3层非隐藏子目录中的普通文件，
+例如会扫描 `input/一层/二层/三层/视频.mp4`，不会进入第4层子目录。文件大小和纳秒
+修改时间连续60秒不变后建立任务。隐藏文件、隐藏目录和符号链接不会被跟随；任务页和
+Markdown 中的“原文件名”对嵌套视频显示相对于 `input` 的路径，便于区分同名文件。
 
 状态依次为：
 
@@ -215,11 +257,11 @@ docker compose -f compose.yaml pull
 docker compose -f compose.yaml up -d
 ```
 
-固定或回滚到首个稳定版本时，在 Compose 项目目录创建 `.env`：
+固定或回滚到上一个稳定版本时，在 Compose 项目目录创建 `.env`：
 
 ```bash
 cd "$HOME/vislex"
-printf 'VISLEX_TAG=1.0.0\n' > .env
+printf 'VISLEX_TAG=1.0.1\n' > .env
 docker compose -f compose.yaml pull
 docker compose -f compose.yaml up -d
 ```
@@ -243,8 +285,8 @@ docker compose -f compose.yaml down
 HOST_BIND_IP=192.168.31.65
 HOST_PORT=8080
 TRUSTED_HOSTS=127.0.0.1,localhost,192.168.31.65
-APP_UID=501
-APP_GID=20
+PUID=501
+PGID=20
 ```
 
 然后重新创建容器：
@@ -256,7 +298,7 @@ zsh -lc 'docker compose up -d --build --force-recreate'
 只允许可信局域网和主机防火墙范围。不要设置 `HOST_BIND_IP=0.0.0.0`，不要通过路由器
 端口转发、云隧道或反向代理把它公开到互联网。
 
-Linux 用户应把 `APP_UID`、`APP_GID` 改为以下命令的结果，确保非 root 容器能写入
+Linux 用户应把 `PUID`、`PGID` 改为以下命令的结果，确保降权后的容器能写入
 绑定目录：
 
 ```bash
@@ -292,10 +334,10 @@ curl --fail --silent --show-error "${VISLEX_URL}/settings" >/dev/null
 - `docker-credential-desktop` 找不到：使用 `zsh -lc 'docker compose ...'`。
 - `docker compose -f https://...` 把 URL 当成本地路径：先下载 YAML，或在 NAS 的
   Compose 页面直接粘贴。
-- 容器提示 `Permission denied`：确认三个映射目录允许镜像内置用户
-  `10001:10001` 写入。
+- 容器提示 `Permission denied` 或 `unable to open database file`：确认
+  `PUID/PGID` 与映射目录所有者一致，并查看启动日志中的“Vislex 运行用户”。
 - 任务一直排队：先保存 Key、获取模型并保存模型/FPS。
 - 模型出现在列表但任务失败：列表不做能力过滤，请在设置页使用“测试”确认所选模型
   支持视频 Files + Responses。
-- 源码 Compose 出现 `Invalid host header`：将实际访问 IP 或域名加入 `.env` 的
-  `TRUSTED_HOSTS`。NAS 简化 YAML 已使用通配符，因此绝不能开放到公网。
+- 出现 `Invalid host header`：将实际访问 IP 或域名加入 `.env` 的
+  `TRUSTED_HOSTS`，并确认 `HOST_BIND_IP` 是本机私有局域网地址。

@@ -237,19 +237,23 @@ class ArkClient:
                         timeout=httpx.Timeout(self.config.upload_timeout_seconds),
                     )
                     after = os.fstat(source.fileno())
-                    if (
+                    source_changed = (
                         after.st_size != before.st_size
                         or after.st_mtime_ns != before.st_mtime_ns
-                    ):
-                        raise ArkError("源文件在上传过程中发生了变化")
+                    )
                 if _should_retry(response) and attempt < 3:
+                    if source_changed:
+                        raise ArkError("源文件在上传过程中发生了变化")
                     await _retry_delay(attempt, response)
                     continue
                 payload = self._json_or_raise(response, "上传视频")
                 file_id = _file_id(payload)
+                if file_id:
+                    self.last_uploaded_file_id = file_id
+                if source_changed:
+                    raise ArkError("源文件在上传过程中发生了变化")
                 if not file_id:
                     raise ArkError("File API 响应中没有文件 ID")
-                self.last_uploaded_file_id = file_id
                 return payload
             except httpx.TransportError as exc:
                 last_error = exc

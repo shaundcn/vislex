@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .config import MAX_INPUT_SUBDIRECTORY_DEPTH
 from .models import VideoAnalysis
 
 
@@ -221,19 +222,57 @@ def source_matches_task(path: Path, task: Any) -> bool:
         return False
 
 
+def input_source_relative_path(
+    source: Path,
+    input_dir: Path,
+) -> Path | None:
+    try:
+        root = input_dir.resolve(strict=True)
+    except OSError:
+        return None
+    if not source.is_absolute():
+        return None
+    try:
+        relative = source.relative_to(root)
+    except ValueError:
+        return None
+    parts = relative.parts
+    if (
+        not parts
+        or len(parts) - 1 > MAX_INPUT_SUBDIRECTORY_DEPTH
+        or any(part in {"", ".", ".."} or part.startswith(".") for part in parts)
+    ):
+        return None
+    current = root
+    try:
+        for part in parts[:-1]:
+            current /= part
+            metadata = current.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(
+                metadata.st_mode
+            ):
+                return None
+    except OSError:
+        return None
+    return relative
+
+
 def quarantine_and_delete_source(
     source: Path, task: Any, input_dir: Path
 ) -> None:
-    if source.parent.resolve() != input_dir.resolve():
-        raise MediaError("任务源文件不在 input 顶层")
+    if input_source_relative_path(source, input_dir) is None:
+        raise MediaError("任务源文件不在 input 允许的三层目录内")
     if not source_matches_task(source, task):
         raise MediaError("输出完成后源文件身份发生变化，拒绝删除")
     task_id = int(task["id"])
+    source_parent = source.parent
     quarantine = input_dir / (
         f".vislex-delete-{task_id}-{secrets.token_hex(8)}.part"
     )
     os.rename(source, quarantine)
-    fsync_directory(input_dir)
+    fsync_directory(source_parent)
+    if source_parent != input_dir:
+        fsync_directory(input_dir)
     if not source_matches_task(quarantine, task):
         restored = restore_quarantined_source(quarantine, source, input_dir)
         suffix = "" if restored else f"，文件保留在 {quarantine.name}"
@@ -262,12 +301,16 @@ def owned_source_quarantines(input_dir: Path) -> list[tuple[int, Path]]:
 def restore_quarantined_source(
     quarantine: Path, source: Path, input_dir: Path
 ) -> bool:
+    if input_source_relative_path(source, input_dir) is None:
+        return False
     if source.exists() or source.is_symlink():
         return False
     try:
         os.link(quarantine, source, follow_symlinks=False)
         os.unlink(quarantine)
-        fsync_directory(input_dir)
+        fsync_directory(source.parent)
+        if source.parent != input_dir:
+            fsync_directory(input_dir)
         return True
     except OSError:
         return False

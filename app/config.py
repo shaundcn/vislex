@@ -9,6 +9,7 @@ from pathlib import Path
 
 ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 CHINA_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
+MAX_INPUT_SUBDIRECTORY_DEPTH = 3
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:

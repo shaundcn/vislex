@@ -35,6 +35,7 @@ from app.media import (
     OutputCollisionError,
     VideoInfo,
     choose_output_stem,
+    input_source_relative_path,
     outputs_complete,
     probe_video,
     quarantine_and_delete_source,
@@ -258,12 +259,18 @@ class DatabaseAndScannerTests(unittest.TestCase):
             self.assertEqual(scanner.scan_once(120), 0)
             self.assertEqual(len(database.list_tasks()), 1)
 
-    def test_scanner_skips_hidden_directory_and_symlink(self):
+    def test_scanner_skips_hidden_entries_and_symlinks(self):
         with tempfile.TemporaryDirectory() as temporary:
             config = make_config(Path(temporary), stable_seconds=1)
             database = create_db(config)
             (config.input_dir / ".hidden.mp4").write_bytes(b"x")
-            (config.input_dir / "folder").mkdir()
+            hidden_directory = config.input_dir / ".hidden-folder"
+            hidden_directory.mkdir()
+            (hidden_directory / "ignored.mp4").write_bytes(b"x")
+            outside = Path(temporary) / "outside"
+            outside.mkdir()
+            (outside / "ignored.mp4").write_bytes(b"x")
+            (config.input_dir / "linked-folder").symlink_to(outside)
             target = config.input_dir / "real.mp4"
             target.write_bytes(b"x")
             (config.input_dir / "link.mp4").symlink_to(target)
@@ -272,6 +279,87 @@ class DatabaseAndScannerTests(unittest.TestCase):
             scanner.scan_once(1)
             tasks = database.list_tasks()
             self.assertEqual([row["original_name"] for row in tasks], ["real.mp4"])
+
+    def test_scanner_recurses_exactly_three_subdirectory_levels(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary), stable_seconds=1)
+            database = create_db(config)
+            expected = {
+                "root.mp4",
+                "one/level-one.mp4",
+                "one/two/level-two.mp4",
+                "one/two/three/level-three.mp4",
+            }
+            for relative_name in (
+                *sorted(expected),
+                "one/two/three/four/too-deep.mp4",
+            ):
+                path = config.input_dir / relative_name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(relative_name.encode("utf-8"))
+
+            scanner = InputScanner(config, database)
+            self.assertEqual(scanner.scan_once(0), 0)
+            self.assertEqual(scanner.scan_once(1), len(expected))
+            tasks = database.list_tasks()
+            self.assertEqual(
+                {str(row["original_name"]) for row in tasks},
+                expected,
+            )
+            self.assertEqual(
+                {
+                    Path(str(row["source_path"])).relative_to(
+                        config.input_dir
+                    ).as_posix()
+                    for row in tasks
+                },
+                expected,
+            )
+
+    def test_input_source_path_rejects_a_symlinked_parent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary))
+            outside = Path(temporary) / "outside"
+            outside.mkdir()
+            source = outside / "source.mp4"
+            source.write_bytes(b"video")
+            linked = config.input_dir / "linked"
+            linked.symlink_to(outside)
+            self.assertIsNone(
+                input_source_relative_path(
+                    linked / source.name,
+                    config.input_dir,
+                )
+            )
+
+    def test_delete_rejects_a_source_below_the_fourth_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary))
+            source = (
+                config.input_dir
+                / "one"
+                / "two"
+                / "three"
+                / "four"
+                / "source.mp4"
+            )
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"video")
+            metadata = source.lstat()
+            task = {
+                "id": 1,
+                "size_bytes": metadata.st_size,
+                "mtime_ns": metadata.st_mtime_ns,
+                "device": metadata.st_dev,
+                "inode": metadata.st_ino,
+            }
+            with self.assertRaisesRegex(MediaError, "三层目录"):
+                quarantine_and_delete_source(
+                    source,
+                    task,
+                    config.input_dir,
+                )
+            self.assertEqual(source.read_bytes(), b"video")
 
     def test_scanner_queues_replacement_with_same_name_size_and_mtime(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -325,6 +413,7 @@ class DatabaseAndScannerTests(unittest.TestCase):
             self.assertEqual(first["model_snapshot"], "model-a")
             self.assertEqual(first["prompt_snapshot"], "prompt-a")
             self.assertEqual(first["video_fps_snapshot"], 0.3)
+            database.update_task(task_id, remote_file_id="file-pending")
             database.mark_failed(task_id, "expected")
             database.set_settings(
                 {"model_id": "model-b", "video_fps": "1.2", "prompt": "prompt-b"}
@@ -334,6 +423,7 @@ class DatabaseAndScannerTests(unittest.TestCase):
             self.assertEqual(second["model_snapshot"], "model-b")
             self.assertEqual(second["prompt_snapshot"], "prompt-b")
             self.assertEqual(second["video_fps_snapshot"], 1.2)
+            self.assertEqual(second["remote_file_id"], "file-pending")
 
     def test_wal_and_only_two_business_tables(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -522,7 +612,8 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config = make_config(Path(temporary))
             database = create_db(config)
-            source = config.input_dir / "source.mp4"
+            source = config.input_dir / "one" / "two" / "source.mp4"
+            source.parent.mkdir(parents=True)
             source.write_bytes(b"video")
             task_id = add_task(database, source)
             task = database.get_task(task_id)
@@ -560,6 +651,29 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(quarantine.exists())
             self.assertFalse(source.exists())
             self.assertEqual(database.get_task(task_id)["status"], "success")
+
+    async def test_nested_quarantine_restores_source_when_outputs_are_missing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary))
+            database = create_db(config)
+            source = config.input_dir / "one" / "two" / "source.mp4"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"video")
+            task_id = add_task(database, source)
+            database.update_task(task_id, status="moving")
+            quarantine = (
+                config.input_dir
+                / f".vislex-delete-{task_id}-0123456789abcdef.part"
+            )
+            source.rename(quarantine)
+
+            recover_quarantined_sources(config, database)
+
+            self.assertFalse(quarantine.exists())
+            self.assertEqual(source.read_bytes(), b"video")
+            recovered = database.get_task(task_id)
+            self.assertEqual(recovered["status"], "failed")
+            self.assertIn("源文件已恢复", recovered["error"])
 
     async def test_missing_source_recovery_requires_output_hashes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -639,7 +753,14 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                     "prompt": "prompt-a",
                 }
             )
-            source = config.input_dir / "source.mp4"
+            source = (
+                config.input_dir
+                / "one"
+                / "two"
+                / "three"
+                / "source.mp4"
+            )
+            source.parent.mkdir(parents=True)
             source.write_bytes(b"video-content")
             task_id = add_task(database, source)
             claimed = database.claim_next_task()
@@ -680,7 +801,14 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(finished["status"], "success")
             self.assertIsNone(finished["remote_file_id"])
             self.assertFalse(source.exists())
+            self.assertTrue(source.parent.is_dir())
             self.assertTrue((config.output_dir / "归档测试.mp4").is_file())
+            self.assertTrue(
+                all(
+                    item.parent == config.output_dir
+                    for item in config.output_dir.iterdir()
+                )
+            )
             markdown = (
                 config.output_dir / "归档测试.md"
             ).read_text(encoding="utf-8")
@@ -839,6 +967,161 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                 await client.close()
             self.assertEqual(calls, 4)
             self.assertEqual(models, ["all-models-are-kept"])
+
+    async def test_upload_source_change_keeps_file_id_for_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary))
+            source = config.input_dir / "source.mp4"
+            source.write_bytes(b"original-video")
+            metadata = source.lstat()
+            expected = {
+                "size_bytes": metadata.st_size,
+                "mtime_ns": metadata.st_mtime_ns,
+                "device": metadata.st_dev,
+                "inode": metadata.st_ino,
+            }
+
+            async def handler(request: httpx.Request) -> httpx.Response:
+                await request.aread()
+                source.write_bytes(b"changed-after-upload")
+                return httpx.Response(
+                    200,
+                    json={"id": "file-upload-race", "status": "processing"},
+                    request=request,
+                )
+
+            client = ArkClient(
+                config,
+                "secret-key",
+                transport=httpx.MockTransport(handler),
+            )
+            try:
+                with self.assertRaisesRegex(
+                    ArkError, "源文件在上传过程中发生了变化"
+                ):
+                    await client.upload_file(
+                        source,
+                        "model-a",
+                        0.3,
+                        expected_task=expected,
+                    )
+                self.assertEqual(
+                    client.last_uploaded_file_id, "file-upload-race"
+                )
+            finally:
+                await client.close()
+
+    async def test_upload_race_cleanup_is_saved_when_delete_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary))
+            database = create_db(config)
+            save_api_key(config, "abcd-secret-wxyz")
+            database.set_settings(
+                {
+                    "model_id": "model-a",
+                    "video_fps": "0.3",
+                    "prompt": "prompt-a",
+                }
+            )
+            source = config.input_dir / "source.mp4"
+            source.write_bytes(b"video")
+            task_id = add_task(database, source)
+            database.claim_next_task()
+            deleted: list[str] = []
+
+            class FakeArkClient:
+                def __init__(self, *_):
+                    self.last_uploaded_file_id = None
+
+                async def upload_file(self, *_args, **_kwargs):
+                    self.last_uploaded_file_id = "file-upload-race"
+                    raise ArkError("源文件在上传过程中发生了变化")
+
+                async def delete_file(self, file_id):
+                    deleted.append(file_id)
+                    return False
+
+                async def close(self):
+                    return None
+
+            async def fake_probe(_path):
+                return VideoInfo(duration_seconds=1.0)
+
+            with patch("app.pipeline.ArkClient", FakeArkClient), patch(
+                "app.pipeline.probe_video", fake_probe
+            ):
+                await TaskProcessor(config, database).process(task_id)
+
+            failed = database.get_task(task_id)
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["remote_file_id"], "file-upload-race")
+            self.assertEqual(deleted, ["file-upload-race"])
+
+    async def test_retry_cleans_previous_remote_before_new_upload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary))
+            database = create_db(config)
+            save_api_key(config, "abcd-secret-wxyz")
+            database.set_settings(
+                {
+                    "model_id": "model-a",
+                    "video_fps": "0.3",
+                    "prompt": "prompt-a",
+                }
+            )
+            source = config.input_dir / "source.mp4"
+            source.write_bytes(b"video")
+            task_id = add_task(database, source)
+            database.update_task(task_id, remote_file_id="file-previous")
+            database.mark_failed(task_id, "expected")
+            self.assertTrue(database.retry_task(task_id))
+            database.claim_next_task()
+            events: list[str] = []
+
+            class FakeArkClient:
+                def __init__(self, *_):
+                    self.last_uploaded_file_id = None
+
+                async def delete_file(self, file_id):
+                    events.append(f"delete:{file_id}")
+                    return True
+
+                async def upload_file(self, *_args, **_kwargs):
+                    events.append("upload")
+                    self.last_uploaded_file_id = "file-current"
+                    return {"id": "file-current", "status": "ready"}
+
+                async def wait_until_file_ready(self, _payload):
+                    return "file-current"
+
+                async def create_video_response(self, *_):
+                    return (
+                        '{"new_filename":"重试清理","content":"内容",'
+                        '"transcript":[]}'
+                    )
+
+                async def close(self):
+                    return None
+
+            async def fake_probe(_path):
+                return VideoInfo(duration_seconds=1.0)
+
+            with patch("app.pipeline.ArkClient", FakeArkClient), patch(
+                "app.pipeline.probe_video", fake_probe
+            ):
+                await TaskProcessor(config, database).process(task_id)
+
+            self.assertEqual(
+                events,
+                [
+                    "delete:file-previous",
+                    "upload",
+                    "delete:file-current",
+                ],
+            )
+            finished = database.get_task(task_id)
+            self.assertEqual(finished["status"], "success")
+            self.assertIsNone(finished["remote_file_id"])
 
     async def test_remote_protocol_errors_are_retried(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1130,6 +1413,38 @@ class WebAndSecurityTests(unittest.TestCase):
                 markdown_download.headers["content-disposition"].startswith(
                     "attachment;"
                 )
+            )
+
+    def test_zero_length_video_has_zero_content_length(self):
+        video = self.config.output_dir / "空视频.mp4"
+        markdown = self.config.output_dir / "空视频.md"
+        video.write_bytes(b"")
+        markdown.write_text("# empty\n", encoding="utf-8")
+        source = self.config.input_dir / "empty.mp4"
+        source.write_bytes(b"")
+        task_id = add_task(self.database, source)
+        self.database.update_task(
+            task_id,
+            status="success",
+            video_output_path=str(video),
+            md_output_path=str(markdown),
+        )
+
+        with TestClient(self.application) as client:
+            head = client.head(f"/tasks/{task_id}/video")
+            self.assertEqual(head.status_code, 200)
+            self.assertEqual(head.headers["content-length"], "0")
+            response = client.get(f"/tasks/{task_id}/video")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["content-length"], "0")
+            self.assertEqual(response.content, b"")
+            unsatisfied = client.get(
+                f"/tasks/{task_id}/video",
+                headers={"Range": "bytes=0-"},
+            )
+            self.assertEqual(unsatisfied.status_code, 416)
+            self.assertEqual(
+                unsatisfied.headers["content-range"], "bytes */0"
             )
 
     def test_output_symlink_is_never_served(self):

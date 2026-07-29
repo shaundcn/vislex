@@ -571,7 +571,7 @@ async def _serve_video(
 
 def _parse_range(value: str | None, size: int) -> tuple[int, int, bool]:
     if not value:
-        return 0, max(0, size - 1), False
+        return 0, size - 1, False
     if not value.startswith("bytes=") or "," in value:
         raise HTTPException(
             status_code=416, headers={"Content-Range": f"bytes */{size}"}

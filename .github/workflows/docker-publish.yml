@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag without the v prefix, for example 1.0.1"
+        description: "Version tag without the v prefix, for example 1.1.0"
         required: true
         type: string
       publish_latest:
@@ -46,8 +46,8 @@ jobs:
           HOST_BIND_IP: 192.168.1.10
           HOST_PORT: "8080"
           TRUSTED_HOSTS: 127.0.0.1,localhost,192.168.1.10
-          APP_UID: "1000"
-          APP_GID: "1000"
+          PUID: "1000"
+          PGID: "1000"
           VISLEX_TAG: latest
         run: |
           sh -n deploy/install.sh
@@ -74,6 +74,29 @@ jobs:
             -w /workspace \
             vislex:test \
             python -m unittest discover -s tests -v
+          identity_dir="$(mktemp -d)"
+          mkdir -p "$identity_dir/input" "$identity_dir/output" "$identity_dir/data"
+          touch "$identity_dir/input/keep-owner.mp4" "$identity_dir/output/keep-owner.md"
+          input_owner="$(stat -c %u "$identity_dir/input/keep-owner.mp4")"
+          output_owner="$(stat -c %u "$identity_dir/output/keep-owner.md")"
+          docker run --rm \
+            -e PUID=12345 \
+            -e PGID=12345 \
+            -v "$identity_dir/input:/app/input" \
+            -v "$identity_dir/output:/app/output" \
+            -v "$identity_dir/data:/app/data" \
+            vislex:test \
+            python -c 'import os; from pathlib import Path; assert (os.getuid(), os.getgid()) == (12345, 12345); Path("/app/data/identity-check").write_text("ok", encoding="utf-8")'
+          test "$(stat -c %u "$identity_dir/input/keep-owner.mp4")" = "$input_owner"
+          test "$(stat -c %u "$identity_dir/output/keep-owner.md")" = "$output_owner"
+          test "$(stat -c %u "$identity_dir/data/identity-check")" = "12345"
+          docker run --rm \
+            --entrypoint python \
+            --user 0:0 \
+            -v "$identity_dir:/cleanup" \
+            vislex:test \
+            -c 'import shutil; [shutil.rmtree(f"/cleanup/{name}") for name in ("input", "output", "data")]'
+          rmdir "$identity_dir"
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'

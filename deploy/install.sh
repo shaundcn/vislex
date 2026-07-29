@@ -7,12 +7,15 @@ VISLEX_COMPOSE_URL="${VISLEX_COMPOSE_URL:-https://raw.githubusercontent.com/${VI
 VISLEX_DIR="${VISLEX_DIR:-${HOME:?HOME is required}/vislex}"
 host_port_from_shell="${HOST_PORT+x}"
 tag_from_shell="${VISLEX_TAG+x}"
-uid_from_shell="${APP_UID+x}"
-gid_from_shell="${APP_GID+x}"
+puid_from_shell="${PUID+x}"
+pgid_from_shell="${PGID+x}"
+input_dir_from_shell="${VISLEX_INPUT_DIR+x}"
+output_dir_from_shell="${VISLEX_OUTPUT_DIR+x}"
+data_dir_from_shell="${VISLEX_DATA_DIR+x}"
 HOST_PORT="${HOST_PORT:-8080}"
 VISLEX_TAG="${VISLEX_TAG:-latest}"
-APP_UID="${APP_UID:-$(id -u)}"
-APP_GID="${APP_GID:-$(id -g)}"
+PUID="${PUID:-$(id -u)}"
+PGID="${PGID:-$(id -g)}"
 
 fail() {
     printf 'Vislex 安装失败：%s\n' "$*" >&2
@@ -76,7 +79,9 @@ valid_port() {
 }
 
 valid_id() {
-    printf '%s\n' "$1" | awk '$0 !~ /^[0-9]+$/ { exit 1 }'
+    printf '%s\n' "$1" | awk '
+        $0 !~ /^[0-9]+$/ || ($0 + 0) > 2147483647 { exit 1 }
+    '
 }
 
 valid_tag() {
@@ -84,6 +89,22 @@ valid_tag() {
         length($0) < 1 || length($0) > 128 { exit 1 }
         $0 !~ /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/ { exit 1 }
     '
+}
+
+prepare_mount_directory() {
+    requested="$1"
+    label="$2"
+    case "$requested" in
+        /*) directory_path="$requested" ;;
+        *) directory_path="${VISLEX_DIR}/${requested}" ;;
+    esac
+    [ ! -L "$directory_path" ] ||
+        fail "${label} 不能是符号链接：$directory_path"
+    if [ -e "$directory_path" ] && [ ! -d "$directory_path" ]; then
+        fail "${label} 已存在但不是目录：$directory_path"
+    fi
+    mkdir -p "$directory_path"
+    (cd "$directory_path" && pwd -P)
 }
 
 need_command awk
@@ -99,15 +120,6 @@ docker info >/dev/null 2>&1 || fail "无法连接 Docker；请确认 Docker 已�
 mkdir -p "$VISLEX_DIR"
 VISLEX_DIR="$(cd "$VISLEX_DIR" && pwd -P)"
 
-for directory_name in input output data; do
-    directory_path="${VISLEX_DIR}/${directory_name}"
-    [ ! -L "$directory_path" ] || fail "数据目录不能是符号链接：$directory_path"
-    if [ -e "$directory_path" ] && [ ! -d "$directory_path" ]; then
-        fail "数据路径已存在但不是目录：$directory_path"
-    fi
-    mkdir -p "$directory_path"
-done
-
 env_path="${VISLEX_DIR}/.env"
 if [ -e "$env_path" ] && [ ! -f "$env_path" ]; then
     fail ".env 已存在但不是普通文件：$env_path"
@@ -120,20 +132,44 @@ if [ -f "$env_path" ]; then
     fi
     saved_host_port="$(dotenv_value HOST_PORT "$env_path")"
     saved_tag="$(dotenv_value VISLEX_TAG "$env_path")"
-    saved_uid="$(dotenv_value APP_UID "$env_path")"
-    saved_gid="$(dotenv_value APP_GID "$env_path")"
+    saved_puid="$(dotenv_value PUID "$env_path")"
+    saved_pgid="$(dotenv_value PGID "$env_path")"
+    saved_input_dir="$(dotenv_value VISLEX_INPUT_DIR "$env_path")"
+    saved_output_dir="$(dotenv_value VISLEX_OUTPUT_DIR "$env_path")"
+    saved_data_dir="$(dotenv_value VISLEX_DATA_DIR "$env_path")"
     if [ -z "$host_port_from_shell" ] && [ -n "$saved_host_port" ]; then
         HOST_PORT="$saved_host_port"
     fi
     if [ -z "$tag_from_shell" ] && [ -n "$saved_tag" ]; then
         VISLEX_TAG="$saved_tag"
     fi
-    if [ -z "$uid_from_shell" ] && [ -n "$saved_uid" ]; then
-        APP_UID="$saved_uid"
+    if [ -z "$puid_from_shell" ] && [ -n "$saved_puid" ]; then
+        PUID="$saved_puid"
     fi
-    if [ -z "$gid_from_shell" ] && [ -n "$saved_gid" ]; then
-        APP_GID="$saved_gid"
+    if [ -z "$pgid_from_shell" ] && [ -n "$saved_pgid" ]; then
+        PGID="$saved_pgid"
     fi
+    if [ -z "$input_dir_from_shell" ] && [ -n "$saved_input_dir" ]; then
+        VISLEX_INPUT_DIR="$saved_input_dir"
+    fi
+    if [ -z "$output_dir_from_shell" ] && [ -n "$saved_output_dir" ]; then
+        VISLEX_OUTPUT_DIR="$saved_output_dir"
+    fi
+    if [ -z "$data_dir_from_shell" ] && [ -n "$saved_data_dir" ]; then
+        VISLEX_DATA_DIR="$saved_data_dir"
+    fi
+fi
+
+VISLEX_INPUT_DIR="${VISLEX_INPUT_DIR:-${VISLEX_DIR}/input}"
+VISLEX_OUTPUT_DIR="${VISLEX_OUTPUT_DIR:-${VISLEX_DIR}/output}"
+VISLEX_DATA_DIR="${VISLEX_DATA_DIR:-${VISLEX_DIR}/data}"
+VISLEX_INPUT_DIR="$(prepare_mount_directory "$VISLEX_INPUT_DIR" "input 目录")"
+VISLEX_OUTPUT_DIR="$(prepare_mount_directory "$VISLEX_OUTPUT_DIR" "output 目录")"
+VISLEX_DATA_DIR="$(prepare_mount_directory "$VISLEX_DATA_DIR" "data 目录")"
+if [ "$VISLEX_INPUT_DIR" = "$VISLEX_OUTPUT_DIR" ] ||
+    [ "$VISLEX_INPUT_DIR" = "$VISLEX_DATA_DIR" ] ||
+    [ "$VISLEX_OUTPUT_DIR" = "$VISLEX_DATA_DIR" ]; then
+    fail "input、output 和 data 必须映射到三个不同目录"
 fi
 
 if [ -z "${HOST_BIND_IP:-}" ]; then
@@ -155,14 +191,17 @@ valid_ipv4 "$HOST_BIND_IP" || fail "HOST_BIND_IP 不是有效 IPv4：$HOST_BIND_
 private_ipv4 "$HOST_BIND_IP" || fail "HOST_BIND_IP 必须是 10/8、172.16/12 或 192.168/16 私有地址"
 assigned_ipv4 "$HOST_BIND_IP" || fail "HOST_BIND_IP 未分配给当前主机：$HOST_BIND_IP"
 valid_port "$HOST_PORT" || fail "HOST_PORT 必须是 1 至 65535"
-valid_id "$APP_UID" || fail "APP_UID 必须是非负整数"
-valid_id "$APP_GID" || fail "APP_GID 必须是非负整数"
-[ "$APP_UID" -ne 0 ] || fail "APP_UID 不能为 0；请使用普通用户的 UID"
-[ "$APP_GID" -ne 0 ] || fail "APP_GID 不能为 0；请使用普通用户的 GID"
+valid_id "$PUID" || fail "PUID 必须是非负整数"
+valid_id "$PGID" || fail "PGID 必须是非负整数"
+if [ "$PUID" -eq 0 ]; then
+    printf '%s\n' \
+        "Vislex 警告：PUID=0 会让应用持续以 root 身份运行。" >&2
+fi
 valid_tag "$VISLEX_TAG" || fail "VISLEX_TAG 不是有效镜像标签"
 
 TRUSTED_HOSTS="127.0.0.1,localhost,${HOST_BIND_IP}"
-export HOST_BIND_IP HOST_PORT VISLEX_TAG APP_UID APP_GID TRUSTED_HOSTS
+export HOST_BIND_IP HOST_PORT VISLEX_TAG PUID PGID TRUSTED_HOSTS
+export VISLEX_INPUT_DIR VISLEX_OUTPUT_DIR VISLEX_DATA_DIR
 
 if [ ! -f "$env_path" ]; then
     env_part="${VISLEX_DIR}/.env.vislex-$$.part"
@@ -172,9 +211,12 @@ if [ ! -f "$env_path" ]; then
         printf 'HOST_BIND_IP=%s\n' "$HOST_BIND_IP"
         printf 'HOST_PORT=%s\n' "$HOST_PORT"
         printf 'TRUSTED_HOSTS=%s\n' "$TRUSTED_HOSTS"
-        printf 'APP_UID=%s\n' "$APP_UID"
-        printf 'APP_GID=%s\n' "$APP_GID"
+        printf 'PUID=%s\n' "$PUID"
+        printf 'PGID=%s\n' "$PGID"
         printf 'VISLEX_TAG=%s\n' "$VISLEX_TAG"
+        printf 'VISLEX_INPUT_DIR=%s\n' "$VISLEX_INPUT_DIR"
+        printf 'VISLEX_OUTPUT_DIR=%s\n' "$VISLEX_OUTPUT_DIR"
+        printf 'VISLEX_DATA_DIR=%s\n' "$VISLEX_DATA_DIR"
     } >"$env_part"
     mv "$env_part" "$env_path"
 fi

@@ -4,13 +4,14 @@ import asyncio
 import hashlib
 import logging
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from .ark import ArkClient, ArkError, read_api_key
-from .config import AppConfig
+from .config import AppConfig, MAX_INPUT_SUBDIRECTORY_DEPTH
 from .db import Database
-from .media import remove_owned_part_files
+from .media import input_source_relative_path, remove_owned_part_files
 from .pipeline import (
     TaskProcessor,
     recover_interrupted_tasks,
@@ -39,76 +40,104 @@ class InputScanner:
 
     def scan_once(self, now: float) -> int:
         submitted = 0
-        live_names: set[str] = set()
-        with os.scandir(self.config.input_dir) as entries:
+        live_paths: set[str] = set()
+        for relative_path, source_path, metadata in self._candidate_files():
+            relative_name = relative_path.as_posix()
+            live_paths.add(relative_name)
+            observed = self.observed.get(relative_name)
+            identity = (
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_dev,
+                metadata.st_ino,
+            )
+            if observed is None or identity != (
+                observed.size_bytes,
+                observed.mtime_ns,
+                observed.device,
+                observed.inode,
+            ):
+                self.observed[relative_name] = ObservedFile(
+                    size_bytes=metadata.st_size,
+                    mtime_ns=metadata.st_mtime_ns,
+                    device=metadata.st_dev,
+                    inode=metadata.st_ino,
+                    unchanged_since=now,
+                )
+                continue
+            if now - observed.unchanged_since < self.config.stable_seconds:
+                continue
+            signature = _file_signature(
+                relative_name,
+                observed.size_bytes,
+                observed.mtime_ns,
+                observed.device,
+                observed.inode,
+            )
+            if observed.submitted_signature == signature:
+                continue
+            if self.database.task_exists_for_identity(
+                source_path=source_path,
+                size_bytes=observed.size_bytes,
+                mtime_ns=observed.mtime_ns,
+                device=observed.device,
+                inode=observed.inode,
+            ):
+                observed.submitted_signature = signature
+                continue
+            task_id = self.database.create_task(
+                signature=signature,
+                source_path=source_path,
+                original_name=relative_name,
+                extension=source_path.suffix,
+                size_bytes=observed.size_bytes,
+                mtime_ns=observed.mtime_ns,
+                device=observed.device,
+                inode=observed.inode,
+            )
+            observed.submitted_signature = signature
+            if task_id is not None:
+                submitted += 1
+        for missing in set(self.observed) - live_paths:
+            self.observed.pop(missing, None)
+        return submitted
+
+    def _candidate_files(
+        self,
+    ) -> Iterator[tuple[Path, Path, os.stat_result]]:
+        directories: list[tuple[Path, int]] = [(self.config.input_dir, 0)]
+        while directories:
+            directory, depth = directories.pop()
+            try:
+                with os.scandir(directory) as iterator:
+                    entries = sorted(iterator, key=lambda item: item.name)
+            except OSError:
+                if depth == 0:
+                    raise
+                logger.warning("cannot scan input subdirectory: %s", directory)
+                continue
             for entry in entries:
                 if entry.name.startswith("."):
                     continue
                 try:
-                    if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if depth < MAX_INPUT_SUBDIRECTORY_DEPTH:
+                            directories.append((Path(entry.path), depth + 1))
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
                         continue
                     metadata = entry.stat(follow_symlinks=False)
                 except OSError:
                     continue
-                live_names.add(entry.name)
-                observed = self.observed.get(entry.name)
-                identity = (
-                    metadata.st_size,
-                    metadata.st_mtime_ns,
-                    metadata.st_dev,
-                    metadata.st_ino,
+                source_path = Path(entry.path)
+                relative_path = input_source_relative_path(
+                    source_path, self.config.input_dir
                 )
-                if observed is None or identity != (
-                    observed.size_bytes,
-                    observed.mtime_ns,
-                    observed.device,
-                    observed.inode,
-                ):
-                    self.observed[entry.name] = ObservedFile(
-                        size_bytes=metadata.st_size,
-                        mtime_ns=metadata.st_mtime_ns,
-                        device=metadata.st_dev,
-                        inode=metadata.st_ino,
-                        unchanged_since=now,
-                    )
+                if relative_path is None:
                     continue
-                if now - observed.unchanged_since < self.config.stable_seconds:
-                    continue
-                signature = _file_signature(
-                    entry.name,
-                    observed.size_bytes,
-                    observed.mtime_ns,
-                    observed.device,
-                    observed.inode,
-                )
-                if observed.submitted_signature == signature:
-                    continue
-                source_path = self.config.input_dir / entry.name
-                if self.database.task_exists_for_identity(
-                    source_path=source_path,
-                    size_bytes=observed.size_bytes,
-                    mtime_ns=observed.mtime_ns,
-                    device=observed.device,
-                    inode=observed.inode,
-                ):
-                    observed.submitted_signature = signature
-                    continue
-                task_id = self.database.create_task(
-                    signature=signature,
-                    source_path=source_path,
-                    original_name=entry.name,
-                    extension=Path(entry.name).suffix,
-                    size_bytes=observed.size_bytes,
-                    mtime_ns=observed.mtime_ns,
-                    device=observed.device,
-                    inode=observed.inode,
-                )
-                observed.submitted_signature = signature
-                if task_id is not None:
-                    submitted += 1
-        for missing in set(self.observed) - live_names:
-            self.observed.pop(missing, None)
-        return submitted
+                yield relative_path, source_path, metadata
 
 
 class ApplicationRuntime:

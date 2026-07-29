@@ -406,7 +406,6 @@ class Database:
                     prompt_snapshot = NULL,
                     model_snapshot = NULL,
                     video_fps_snapshot = NULL,
-                    remote_file_id = NULL,
                     response_json = NULL,
                     final_stem = NULL,
                     video_output_path = NULL,

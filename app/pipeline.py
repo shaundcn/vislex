@@ -24,6 +24,7 @@ from .media import (
     calculate_output_proof,
     choose_output_stem,
     fsync_directory,
+    input_source_relative_path,
     owned_source_quarantines,
     outputs_complete,
     probe_video,
@@ -59,6 +60,7 @@ class TaskProcessor:
         source = Path(str(task["source_path"]))
         client: ArkClient | None = None
         cleanup_file_id = str(task["remote_file_id"] or "")
+        cleanup_attempted_file_id = ""
         api_key = ""
         try:
             extension = validate_output_extension(str(task["extension"]))
@@ -93,6 +95,18 @@ class TaskProcessor:
             prompt = str(task["prompt_snapshot"] or "")
             fps = float(task["video_fps_snapshot"])
             client = ArkClient(self.config, api_key)
+
+            if cleanup_file_id:
+                cleanup_attempted_file_id = cleanup_file_id
+                if await client.delete_file(cleanup_file_id):
+                    self.database.clear_remote_file_id(
+                        task_id, cleanup_file_id
+                    )
+                    cleanup_file_id = ""
+                else:
+                    raise ArkError(
+                        "上次远程临时文件清理失败，请稍后重试"
+                    )
 
             self.database.update_task(task_id, status="uploading")
             upload_payload = await client.upload_file(
@@ -156,16 +170,24 @@ class TaskProcessor:
         finally:
             if client is not None:
                 try:
+                    cleanup_file_id = (
+                        client.last_uploaded_file_id or cleanup_file_id
+                    )
                     if cleanup_file_id:
-                        deleted = await client.delete_file(cleanup_file_id)
-                        if deleted:
-                            self.database.clear_remote_file_id(
-                                task_id, cleanup_file_id
-                            )
-                        else:
-                            logger.warning(
-                                "remote cleanup deferred for task %s", task_id
-                            )
+                        self.database.update_task(
+                            task_id, remote_file_id=cleanup_file_id
+                        )
+                        if cleanup_file_id != cleanup_attempted_file_id:
+                            deleted = await client.delete_file(cleanup_file_id)
+                            if deleted:
+                                self.database.clear_remote_file_id(
+                                    task_id, cleanup_file_id
+                                )
+                            else:
+                                logger.warning(
+                                    "remote cleanup deferred for task %s",
+                                    task_id,
+                                )
                 except Exception:
                     logger.warning(
                         "remote cleanup failed for task %s", task_id, exc_info=True
@@ -236,8 +258,8 @@ class TaskProcessor:
         )
 
     def _validate_source(self, source: Path, task: Any) -> None:
-        if source.parent.resolve() != self.config.input_dir.resolve():
-            raise MediaError("任务源文件不在 input 顶层")
+        if input_source_relative_path(source, self.config.input_dir) is None:
+            raise MediaError("任务源文件不在 input 允许的三层目录内")
         if not source_matches_task(source, task):
             raise MediaError("源文件不存在、已变化或不是普通文件")
 
@@ -279,6 +301,9 @@ def recover_quarantined_sources(
         if task is None or not source_matches_task(quarantine, task):
             continue
         source = Path(str(task["source_path"]))
+        if input_source_relative_path(source, config.input_dir) is None:
+            database.mark_failed(task_id, "恢复时任务源文件路径不安全")
+            continue
         video_path = safe_flat_path(config.output_dir, task["video_output_path"])
         markdown_path = safe_flat_path(config.output_dir, task["md_output_path"])
         if stored_output_proof_matches(task, video_path, markdown_path):
@@ -310,11 +335,18 @@ def recover_interrupted_tasks(
     for task in database.active_tasks():
         task_id = int(task["id"])
         source = Path(str(task["source_path"]))
+        source_allowed = (
+            input_source_relative_path(source, config.input_dir) is not None
+        )
         video_path = safe_flat_path(config.output_dir, task["video_output_path"])
         markdown_path = safe_flat_path(config.output_dir, task["md_output_path"])
         if outputs_complete(task, video_path, markdown_path):
             if source.exists() or source.is_symlink():
-                if source_matches_task(source, task) and task["response_json"]:
+                if (
+                    source_allowed
+                    and source_matches_task(source, task)
+                    and task["response_json"]
+                ):
                     reset_ids.append(task_id)
                 else:
                     database.mark_failed(
@@ -334,7 +366,7 @@ def recover_interrupted_tasks(
                     task_id, "恢复时源文件不存在，且输出未通过完整性校验"
                 )
             continue
-        if source_matches_task(source, task):
+        if source_allowed and source_matches_task(source, task):
             if task["status"] == "moving" and not task["response_json"]:
                 database.mark_failed(task_id, "移动中断且缺少已验证的模型结果")
             else:
@@ -353,6 +385,8 @@ def retry_failed_task(
     if task is None or task["status"] != "failed":
         return False, "该任务不存在或当前不能重试"
     source = Path(str(task["source_path"]))
+    if input_source_relative_path(source, config.input_dir) is None:
+        return False, "任务源文件不在 input 允许的三层目录内"
     video_path = safe_flat_path(config.output_dir, task["video_output_path"])
     markdown_path = safe_flat_path(config.output_dir, task["md_output_path"])
     if (
