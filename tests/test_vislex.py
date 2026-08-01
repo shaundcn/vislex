@@ -66,7 +66,6 @@ def make_config(root: Path, *, stable_seconds: int = 60) -> AppConfig:
         data_dir=data_dir,
         database_path=data_dir / "vislex.sqlite3",
         api_key_path=data_dir / "ark_api_key",
-        trusted_hosts=("testserver", "127.0.0.1", "localhost"),
         stable_seconds=stable_seconds,
         file_poll_seconds=0.2,
         file_poll_timeout_seconds=2,
@@ -1466,10 +1465,17 @@ class WebAndSecurityTests(unittest.TestCase):
         with self.assertRaises(ArkError):
             read_api_key(self.config)
 
-    def test_untrusted_host_is_rejected(self):
+    def test_proxy_host_is_accepted_and_static_url_is_relative(self):
         with TestClient(self.application) as client:
-            response = client.get("/", headers={"Host": "evil.example"})
-            self.assertEqual(response.status_code, 400)
+            response = client.get(
+                "/", headers={"Host": "device.user.fnos.net"}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('href="/static/style.css"', response.text)
+            self.assertNotIn(
+                'href="http://device.user.fnos.net/static/style.css"',
+                response.text,
+            )
 
     def test_dashboard_paginates_tasks_after_two_hundred(self):
         for number in range(1, 202):

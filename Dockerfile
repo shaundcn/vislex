@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN groupadd --gid 10001 vislex \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin vislex
 
-ARG VISLEX_VERSION=1.1.0
+ARG VISLEX_VERSION=1.1.1
 ARG VISLEX_REVISION=unknown
 
 LABEL org.opencontainers.image.title="Vislex" \
@@ -35,4 +35,4 @@ EXPOSE 8000
 
 ENTRYPOINT ["python", "-m", "app.entrypoint"]
 
-CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--workers", "1", "--no-access-log"]

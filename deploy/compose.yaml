@@ -1,17 +1,9 @@
-name: vislex
-
 services:
   vislex:
-    image: "docker.io/shaundcn/vislex:${VISLEX_TAG:-latest}"
-    container_name: vislex
-    init: true
+    image: shaundcn/vislex:1.1.1
     ports:
-      - "${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-8080}:8000"
-    environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      TRUSTED_HOSTS: "${TRUSTED_HOSTS:-127.0.0.1,localhost}"
+      - "8000:8000"
     volumes:
-      - "${VISLEX_INPUT_DIR:-./input}:/app/input"
-      - "${VISLEX_OUTPUT_DIR:-./output}:/app/output"
-      - "${VISLEX_DATA_DIR:-./data}:/app/data"
+      - ./输入文件夹:/app/input
+      - ./输出文件夹:/app/output
+      - ./数据文件夹:/app/data

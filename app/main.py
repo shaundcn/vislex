@@ -25,7 +25,6 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .ark import (
     ArkClient,
@@ -82,9 +81,6 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     application.state.config = app_config
     application.state.database = database
     application.state.runtime = runtime
-    application.add_middleware(
-        TrustedHostMiddleware, allowed_hosts=list(app_config.trusted_hosts)
-    )
     application.mount(
         "/static",
         StaticFiles(directory=str(BASE_DIR / "static"), check_dir=True),

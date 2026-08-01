@@ -25,33 +25,19 @@ class DeploymentArtifactTests(unittest.TestCase):
         compose = (PROJECT_ROOT / "deploy" / "compose.yaml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("docker.io/shaundcn/vislex:", compose)
-        self.assertIn(
-            '${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-8080}:8000',
+        self.assertEqual(
             compose,
+            """services:
+  vislex:
+    image: shaundcn/vislex:1.1.1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./输入文件夹:/app/input
+      - ./输出文件夹:/app/output
+      - ./数据文件夹:/app/data
+""",
         )
-        self.assertIn(
-            'TRUSTED_HOSTS: "${TRUSTED_HOSTS:-127.0.0.1,localhost}"',
-            compose,
-        )
-        self.assertIn('PUID: "${PUID:-1000}"', compose)
-        self.assertIn('PGID: "${PGID:-1000}"', compose)
-        self.assertIn("${VISLEX_INPUT_DIR:-./input}", compose)
-        self.assertIn("${VISLEX_OUTPUT_DIR:-./output}", compose)
-        self.assertIn("${VISLEX_DATA_DIR:-./data}", compose)
-        self.assertIn("init: true", compose)
-        self.assertNotIn("\n    build:", compose)
-        for removed_option in (
-            "pull_policy:",
-            "restart:",
-            "\n    user:",
-            "read_only:",
-            "security_opt:",
-            "cap_drop:",
-            "tmpfs:",
-            "healthcheck:",
-        ):
-            self.assertNotIn(removed_option, compose)
 
     def test_installer_is_idempotent_and_preserves_data(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -67,9 +53,6 @@ class DeploymentArtifactTests(unittest.TestCase):
                     "PATH": f"{fake_bin}:{environment['PATH']}",
                     "HOME": str(root),
                     "VISLEX_DIR": str(install_dir),
-                    "VISLEX_INPUT_DIR": str(root / "media input"),
-                    "VISLEX_OUTPUT_DIR": str(root / "knowledge output"),
-                    "VISLEX_DATA_DIR": str(root / "application data"),
                     "FAKE_COMPOSE": str(
                         PROJECT_ROOT / "deploy" / "compose.yaml"
                     ),
@@ -77,45 +60,72 @@ class DeploymentArtifactTests(unittest.TestCase):
             )
 
             first = self._run_installer(environment)
-            self.assertIn("http://192.168.50.10:8080/", first.stdout)
-            self.assertEqual(
-                stat.S_IMODE((install_dir / ".env").stat().st_mode), 0o600
-            )
+            self.assertIn("http://NAS局域网IP:8000/", first.stdout)
+            self.assertFalse((install_dir / ".env").exists())
             self.assertTrue((install_dir / "compose.yaml").is_file())
-            environment_text = (install_dir / ".env").read_text(
-                encoding="utf-8"
+            self.assertEqual(
+                (install_dir / "compose.yaml").read_text(encoding="utf-8"),
+                (PROJECT_ROOT / "deploy" / "compose.yaml").read_text(
+                    encoding="utf-8"
+                ),
             )
-            self.assertIn("PUID=", environment_text)
-            self.assertIn("PGID=", environment_text)
-            for name, variable in (
-                ("media input", "VISLEX_INPUT_DIR"),
-                ("knowledge output", "VISLEX_OUTPUT_DIR"),
-                ("application data", "VISLEX_DATA_DIR"),
-            ):
-                expected = root / name
-                self.assertTrue(expected.is_dir())
-                self.assertIn(f"{variable}={expected}\n", environment_text)
+            for name in ("输入文件夹", "输出文件夹", "数据文件夹"):
+                self.assertTrue((install_dir / name).is_dir())
 
-            sentinel = root / "media input" / "keep-me.mp4"
+            sentinel = install_dir / "输入文件夹" / "keep-me.mp4"
             sentinel.write_bytes(b"keep")
-            with (install_dir / ".env").open("a", encoding="utf-8") as handle:
-                handle.write("CUSTOM_VALUE=preserved\n")
+            with (install_dir / "compose.yaml").open(
+                "a", encoding="utf-8"
+            ) as handle:
+                handle.write("# existing compose preserved\n")
 
-            override = dict(environment)
-            override["HOST_PORT"] = "9090"
-            for name in (
-                "VISLEX_INPUT_DIR",
-                "VISLEX_OUTPUT_DIR",
-                "VISLEX_DATA_DIR",
-            ):
-                override.pop(name)
-            second = self._run_installer(override)
-            self.assertIn("http://192.168.50.10:9090/", second.stdout)
+            second = self._run_installer(environment)
+            self.assertIn("http://NAS局域网IP:8000/", second.stdout)
             self.assertEqual(sentinel.read_bytes(), b"keep")
             self.assertIn(
-                "CUSTOM_VALUE=preserved",
-                (install_dir / ".env").read_text(encoding="utf-8"),
+                "# existing compose preserved",
+                (install_dir / "compose.yaml").read_text(encoding="utf-8"),
             )
+
+    def test_installer_preserves_legacy_layout_without_a_compose_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            self._write_fake_commands(fake_bin)
+            install_dir = root / "vislex"
+            for name in ("input", "output", "data"):
+                (install_dir / name).mkdir(parents=True, exist_ok=True)
+            sentinel = install_dir / "input" / "keep-me.mp4"
+            sentinel.write_bytes(b"keep")
+            env_path = install_dir / ".env"
+            env_path.write_text("CUSTOM_VALUE=preserved\n", encoding="utf-8")
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "HOME": str(root),
+                    "VISLEX_DIR": str(install_dir),
+                    "FAKE_COMPOSE": str(
+                        PROJECT_ROOT / "deploy" / "compose.yaml"
+                    ),
+                }
+            )
+
+            self._run_installer(environment)
+
+            self.assertEqual(sentinel.read_bytes(), b"keep")
+            self.assertEqual(
+                env_path.read_text(encoding="utf-8"),
+                "CUSTOM_VALUE=preserved\n",
+            )
+            installed = (install_dir / "compose.yaml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("${VISLEX_INPUT_DIR:-./input}", installed)
+            self.assertIn("${VISLEX_OUTPUT_DIR:-./output}", installed)
+            self.assertIn("${VISLEX_DATA_DIR:-./data}", installed)
+            self.assertFalse((install_dir / "输入文件夹").exists())
 
     def test_ci_cleans_identity_fixture_with_a_root_container(self):
         workflow = (
@@ -125,57 +135,6 @@ class DeploymentArtifactTests(unittest.TestCase):
         self.assertIn(':/cleanup"', workflow)
         self.assertIn("--entrypoint python", workflow)
         self.assertIn("--user 0:0", workflow)
-
-    def test_installer_rejects_a_wildcard_address(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            fake_bin = root / "bin"
-            fake_bin.mkdir()
-            self._write_fake_commands(fake_bin)
-            environment = os.environ.copy()
-            environment.update(
-                {
-                    "PATH": f"{fake_bin}:{environment['PATH']}",
-                    "HOME": str(root),
-                    "VISLEX_DIR": str(root / "vislex"),
-                    "HOST_BIND_IP": "0.0.0.0",
-                    "FAKE_COMPOSE": str(
-                        PROJECT_ROOT / "deploy" / "compose.yaml"
-                    ),
-                }
-            )
-            result = subprocess.run(
-                [str(PROJECT_ROOT / "deploy" / "install.sh")],
-                cwd=PROJECT_ROOT,
-                env=environment,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("必须是 10/8", result.stderr)
-
-    def test_installer_warns_about_root_container_identity(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            fake_bin = root / "bin"
-            fake_bin.mkdir()
-            self._write_fake_commands(fake_bin)
-            environment = os.environ.copy()
-            environment.update(
-                {
-                    "PATH": f"{fake_bin}:{environment['PATH']}",
-                    "HOME": str(root),
-                    "VISLEX_DIR": str(root / "vislex"),
-                    "PUID": "0",
-                    "PGID": "0",
-                    "FAKE_COMPOSE": str(
-                        PROJECT_ROOT / "deploy" / "compose.yaml"
-                    ),
-                }
-            )
-            result = self._run_installer(environment)
-            self.assertIn("持续以 root 身份运行", result.stderr)
 
     def test_entrypoint_identity_defaults_and_overrides(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -234,12 +193,33 @@ class DeploymentArtifactTests(unittest.TestCase):
         )
         self.assertNotIn("\nUSER 10001:10001", dockerfile)
 
-    def test_feature_release_version_is_1_1_0(self):
+    def test_patch_release_version_is_1_1_1(self):
         dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("ARG VISLEX_VERSION=1.1.0", dockerfile)
-        self.assertIn("当前源码版本：`1.1.0`", readme)
-        self.assertIn("VISLEX_TAG=1.0.1", readme)
+        self.assertIn("ARG VISLEX_VERSION=1.1.1", dockerfile)
+        self.assertIn("当前源码版本：`1.1.1`", readme)
+        self.assertIn("shaundcn/vislex:1.1.1", readme)
+
+    def test_dockerfile_allows_uvicorn_port_override(self):
+        dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("EXPOSE 8000", dockerfile)
+        command = dockerfile.split("CMD ", 1)[1]
+        self.assertNotIn('"--port"', command)
+
+    def test_trusted_host_configuration_is_removed(self):
+        for relative_path in (
+            ".env.example",
+            "README.md",
+            "app/config.py",
+            "app/main.py",
+            "docker-compose.yml",
+            "deploy/compose.yaml",
+            "deploy/install.sh",
+        ):
+            content = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+            with self.subTest(path=relative_path):
+                self.assertNotIn("TRUSTED" + "_HOSTS", content)
+                self.assertNotIn("Trusted" + "HostMiddleware", content)
 
     def test_source_compose_keeps_only_required_startup_capabilities(self):
         compose = (PROJECT_ROOT / "docker-compose.yml").read_text(
@@ -298,24 +278,13 @@ if [ "${1:-}" = "compose" ]; then
             exit 0
             ;;
         *" config "*)
-            printf 'services:\\n  vislex:\\n    image: docker.io/shaundcn/vislex:%s\\n' "${VISLEX_TAG:-latest}"
+            printf 'services:\\n  vislex:\\n    image: shaundcn/vislex:1.1.1\\n'
             exit 0
             ;;
         *)
             exit 0
             ;;
     esac
-fi
-exit 1
-""",
-            "ip": """#!/bin/sh
-if [ "${1:-}" = "-4" ] && [ "${2:-}" = "route" ]; then
-    printf '1.1.1.1 via 192.168.50.1 dev eth0 src 192.168.50.10 uid 1000\\n'
-    exit 0
-fi
-if [ "${1:-}" = "-o" ] && [ "${2:-}" = "-4" ]; then
-    printf '2: eth0 inet 192.168.50.10/24 brd 192.168.50.255 scope global eth0\\n'
-    exit 0
 fi
 exit 1
 """,

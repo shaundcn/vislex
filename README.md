@@ -10,7 +10,7 @@ Markdown 平铺写入 `output`。
 公开镜像为 `docker.io/shaundcn/vislex`，支持 Linux amd64 和 arm64。Linux
 服务器可以只下载部署 YAML 运行，不需要克隆源码仓库。
 
-当前源码版本：`1.1.0`。Docker Hub 稳定版本：`1.1.0`。
+当前源码版本：`1.1.1`。Docker Hub 稳定版本：`1.1.1`。
 
 ## 技术与限制
 
@@ -58,69 +58,82 @@ Compose 使用以下固定挂载：
 https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose.yaml
 ```
 
-默认端口为 `8080`，默认数据目录是 Compose 项目目录下的
-`input/output/data`。可以直接修改 YAML 左侧端口和挂载路径，也可以设置：
+YAML 内容保持极简：
 
-```dotenv
-HOST_BIND_IP=192.168.1.20
-HOST_PORT=8080
-TRUSTED_HOSTS=127.0.0.1,localhost,192.168.1.20
-VISLEX_TAG=latest
-PUID=1000
-PGID=1000
-VISLEX_INPUT_DIR=/你的路径/vislex/input
-VISLEX_OUTPUT_DIR=/你的路径/vislex/output
-VISLEX_DATA_DIR=/你的路径/vislex/data
+```yaml
+services:
+  vislex:
+    image: shaundcn/vislex:1.1.1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./输入文件夹:/app/input
+      - ./输出文件夹:/app/output
+      - ./数据文件夹:/app/data
 ```
 
-`HOST_BIND_IP` 必须是 NAS 自己的私有局域网 IPv4。在线安装脚本会自动检测该地址；
-直接在 NAS 的 Compose 页面粘贴 YAML 时需要显式填写。默认值为 `127.0.0.1`，不会
-把没有登录功能的服务意外监听到全部网络接口。
+宿主机和容器统一使用 `8000`，默认目录是 Compose 项目目录下的
+`输入文件夹/输出文件夹/数据文件夹`。NAS 已有目录只需替换每条挂载冒号左侧的路径，
+例如：
 
-`PUID`、`PGID` 应填写拥有这些映射目录的 NAS 用户数字 UID/GID；常见首位用户是
-`1000:1000`，但不同 NAS 可能不同，可用 `id` 确认。镜像启动时会把三个挂载目录本身
-以及已有的 Vislex 数据库/API Key 调整给该身份，随后立即降权运行；不会递归修改
-`input` 中的视频或 `output` 中的已有归档。
+```yaml
+volumes:
+  - /你的待处理视频目录:/app/input
+  - /你的Markdown归档目录:/app/output
+  - /你的应用数据目录:/app/data
+```
 
-一条命令在线安装会自动检测局域网 IP、创建但不清空数据目录并保存设置：
+一条命令在线安装会创建但不清空三个中文目录并启动服务：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/install.sh | sh
 ```
 
-需要自定义端口、运行身份或映射目录时：
+安装器不会覆盖已有 `compose.yaml` 或 `.env`。检测到旧版英文
+`input/output/data` 且缺少 Compose 时，会继续映射旧目录，不会自动迁移到中文目录。
+
+也可以手动下载并运行YAML：
 
 ```bash
-HOST_PORT=8080 \
-PUID="$(id -u)" \
-PGID="$(id -g)" \
-VISLEX_INPUT_DIR="/你的路径/input" \
-VISLEX_OUTPUT_DIR="/你的路径/output" \
-VISLEX_DATA_DIR="/你的路径/data" \
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/install.sh)"
-```
-
-也可以手动下载 YAML：
-
-```bash
-mkdir -p "$HOME/vislex"/input "$HOME/vislex"/output "$HOME/vislex"/data
+mkdir -p "$HOME/vislex"
 cd "$HOME/vislex"
 curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose.yaml \
   -o compose.yaml
-printf '%s\n' \
-  'HOST_BIND_IP=192.168.1.20' \
-  'TRUSTED_HOSTS=127.0.0.1,localhost,192.168.1.20' > .env
 docker compose -f compose.yaml up -d
 ```
 
-访问地址为 `http://NAS局域网IP:8080/`。这个简化 YAML 只用于可信局域网，禁止
-公网端口转发或公开反向代理。按简化部署要求，它不包含自动拉取、自动重启、健康检查、
-只读根文件系统或额外容器安全限制。NAS 重启后可能需要手动启动项目，镜像更新也需要
-手动执行下文命令。
+访问地址为 `http://NAS局域网IP:8000/`。`8000:8000` 会监听 NAS 的全部网络接口；
+这个简化 YAML 只用于可信局域网或登录后的 FNConnect，禁止公网端口转发、公共反向
+代理或直接暴露公网。它不包含自动拉取、自动重启、健康检查、`init`、固定运行用户、
+只读根文件系统或额外容器安全限制。
 
-`PUID=0`、`PGID=0` 可用于确认权限问题，但会让应用和 FFmpeg 持续以 root 身份
-运行，不建议作为长期配置。只设置同名环境变量对不支持它们的镜像没有作用；Vislex
-镜像的入口程序会实际读取并应用这两个值。
+### FNConnect
+
+先在 FNConnect 中登录 NAS，再进入 fnOS 的 Docker 页面并点击 Vislex 的 `8000`
+映射端口。Vislex 不需要配置 FNConnect 域名，也不检查请求的 Host；访问控制完全依赖
+NAS/FNConnect，因此不要把代理地址作为无保护的公开站点分享。
+
+### 自定义端口和权限
+
+自定义端口时，宿主机端口、容器端口和 `UVICORN_PORT` 必须相同，例如：
+
+```yaml
+ports:
+  - "9090:9090"
+environment:
+  UVICORN_PORT: "9090"
+```
+
+镜像默认以内部身份 `10001:10001` 运行。NAS 挂载目录出现权限错误时，可按目录所有者
+设置 `PUID`、`PGID`；镜像入口会先处理挂载目录，再降权运行：
+
+```yaml
+environment:
+  PUID: "1000"
+  PGID: "1000"
+```
+
+不要长期使用 `PUID=0`、`PGID=0`，这会让应用和 FFmpeg 持续以 root 身份运行。
 
 ## 从源码启动
 
@@ -159,7 +172,7 @@ API Key 原子写入 `data/ark_api_key` 并设置为 `0600`。网页只展示首
 
 ## 自动处理
 
-源码 `1.1.0` 的扫描器每30秒检查 `input` 顶层及最多3层非隐藏子目录中的普通文件，
+源码 `1.1.1` 的扫描器每30秒检查 `input` 顶层及最多3层非隐藏子目录中的普通文件，
 例如会扫描 `input/一层/二层/三层/视频.mp4`，不会进入第4层子目录。文件大小和纳秒
 修改时间连续60秒不变后建立任务。隐藏文件、隐藏目录和符号链接不会被跟随；任务页和
 Markdown 中的“原文件名”对嵌套视频显示相对于 `input` 的路径，便于区分同名文件。
@@ -249,7 +262,7 @@ zsh -lc 'docker compose start'
 
 ## YAML 安装的更新、回滚与卸载
 
-更新到最新公开镜像：
+重新拉取当前YAML固定的镜像：
 
 ```bash
 cd "$HOME/vislex"
@@ -257,13 +270,13 @@ docker compose -f compose.yaml pull
 docker compose -f compose.yaml up -d
 ```
 
-固定或回滚到上一个稳定版本时，在 Compose 项目目录创建 `.env`：
+升级或回滚时，编辑 `compose.yaml` 的镜像标签并重新创建容器。上一稳定版本为
+`shaundcn/vislex:1.1.0`：
 
-```bash
-cd "$HOME/vislex"
-printf 'VISLEX_TAG=1.0.1\n' > .env
-docker compose -f compose.yaml pull
-docker compose -f compose.yaml up -d
+```yaml
+services:
+  vislex:
+    image: shaundcn/vislex:1.1.0
 ```
 
 停止并删除容器但保留视频、Markdown、数据库和设置：
@@ -273,8 +286,8 @@ cd "$HOME/vislex"
 docker compose -f compose.yaml down
 ```
 
-不要给 `down` 添加 `-v`，也不要删除 `~/vislex/input`、`output` 或 `data`，
-除非已经单独备份并明确希望删除这些数据。
+不要给 `down` 添加 `-v`，也不要删除中文目录或旧版 `input/output/data`，除非已经
+单独备份并明确希望删除这些数据。
 
 ## 局域网访问
 
@@ -284,7 +297,6 @@ docker compose -f compose.yaml down
 ```dotenv
 HOST_BIND_IP=192.168.31.65
 HOST_PORT=8080
-TRUSTED_HOSTS=127.0.0.1,localhost,192.168.31.65
 PUID=501
 PGID=20
 ```
@@ -339,5 +351,5 @@ curl --fail --silent --show-error "${VISLEX_URL}/settings" >/dev/null
 - 任务一直排队：先保存 Key、获取模型并保存模型/FPS。
 - 模型出现在列表但任务失败：列表不做能力过滤，请在设置页使用“测试”确认所选模型
   支持视频 Files + Responses。
-- 出现 `Invalid host header`：将实际访问 IP 或域名加入 `.env` 的
-  `TRUSTED_HOSTS`，并确认 `HOST_BIND_IP` 是本机私有局域网地址。
+- FNConnect 返回502：确认从已登录的fnOS Docker页面进入，并检查端口映射的左右两侧
+  是否相同；公开YAML应显示 `8000:8000`。

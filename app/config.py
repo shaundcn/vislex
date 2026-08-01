@@ -57,7 +57,6 @@ class AppConfig:
     data_dir: Path
     database_path: Path
     api_key_path: Path
-    trusted_hosts: tuple[str, ...]
     scan_interval_seconds: int = 30
     stable_seconds: int = 60
     max_video_seconds: float = 1800.0
@@ -73,20 +72,12 @@ class AppConfig:
         input_dir = Path(os.getenv("INPUT_DIR", "/app/input")).resolve()
         output_dir = Path(os.getenv("OUTPUT_DIR", "/app/output")).resolve()
         data_dir = Path(os.getenv("DATA_DIR", "/app/data")).resolve()
-        hosts = tuple(
-            part.strip()
-            for part in os.getenv("TRUSTED_HOSTS", "127.0.0.1,localhost").split(",")
-            if part.strip()
-        )
-        if not hosts:
-            raise RuntimeError("TRUSTED_HOSTS 不能为空")
         return cls(
             input_dir=input_dir,
             output_dir=output_dir,
             data_dir=data_dir,
             database_path=data_dir / "vislex.sqlite3",
             api_key_path=data_dir / "ark_api_key",
-            trusted_hosts=hosts,
             scan_interval_seconds=_env_int("SCAN_INTERVAL_SECONDS", 30),
             stable_seconds=_env_int("FILE_STABLE_SECONDS", 60),
             max_video_seconds=_env_float("MAX_VIDEO_SECONDS", 1800.0),

@@ -24,7 +24,6 @@ services:
     environment:
       PUID: "${PUID:-501}"
       PGID: "${PGID:-20}"
-      TRUSTED_HOSTS: "${TRUSTED_HOSTS:-127.0.0.1,localhost}"
       SCAN_INTERVAL_SECONDS: "30"
       FILE_STABLE_SECONDS: "60"
       MAX_VIDEO_SECONDS: "1800"
