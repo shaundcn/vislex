@@ -30,15 +30,15 @@
 
 ## 当前状态与下一步
 
-- 截至 2026-08-01，当前源码版本为 `1.1.2`，默认端口为 `9602`；该版本尚未发布。
-  已发布稳定版本仍为 `1.1.1`。源码和待发布 NAS YAML 使用相同的内外9602端口，
-  中文相对目录及旧版8000端口安装器兼容逻辑保留。编译、63项测试、Compose校验、
-  默认9602与覆盖9090容器验证均已通过；SQLite架构未修改，真实方舟API未调用。
-- GitHub 公开仓库为 `shaundcn/vislex`；实现提交为 `6ed8663`，发布标签为
-  `v1.1.1`，main与标签工作流均成功。
-- Docker Hub 的 `shaundcn/vislex:1.1.1` 与 `latest` 共享 manifest digest
-  `sha256:cdd8fda977c5d471696efaa4d470c1cacdc254854a458cfafa13d4a102428d3f`，包含
-  `linux/amd64` 和 `linux/arm64`；两种架构均已匿名拉取并通过 `/healthz`。
+- 截至 2026-08-01，当前稳定版本为 `1.1.2`，默认端口为 `9602`。源码和公开 NAS
+  YAML 使用相同的内外9602端口，中文相对目录及旧版8000端口安装器兼容逻辑保留。
+  编译、63项测试、Compose校验、默认9602与覆盖9090容器验证均已通过；SQLite架构
+  未修改，真实方舟API未调用。
+- GitHub 公开仓库为 `shaundcn/vislex`；实现提交为 `88b3708`，发布标签为
+  `v1.1.2`，main与标签工作流均成功。
+- Docker Hub 的 `shaundcn/vislex:1.1.2` 与 `latest` 共享 manifest digest
+  `sha256:897e280ccaf60fb0d75f0bed61fbea8c519e999550c56cd52b7a9e82280e3988`，包含
+  `linux/amd64` 和 `linux/arm64`；匿名清单请求及两种架构的9602 `/healthz` 均通过。
 - 在线安装入口和镜像式 Compose 位于 `deploy/`；新安装创建中文目录，已有 Compose、
   `.env` 和旧英文数据目录保持原样。
 - 后续修改先运行 README 中的验证，再按用户明确要求提交或推送。
