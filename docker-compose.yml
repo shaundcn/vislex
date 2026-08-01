@@ -20,7 +20,7 @@ services:
       - SETGID
       - SETUID
     ports:
-      - "${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-8080}:8000"
+      - "${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-9602}:9602"
     environment:
       PUID: "${PUID:-501}"
       PGID: "${PGID:-20}"
@@ -39,7 +39,7 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9602/healthz', timeout=3)"
       interval: 10s
       timeout: 5s
       start_period: 15s

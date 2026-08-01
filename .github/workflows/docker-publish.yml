@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag without the v prefix, for example 1.1.1"
+        description: "Version tag without the v prefix, for example 1.1.2"
         required: true
         type: string
       publish_latest:
@@ -44,7 +44,7 @@ jobs:
       - name: Validate shell and Compose files
         env:
           HOST_BIND_IP: 192.168.1.10
-          HOST_PORT: "8080"
+          HOST_PORT: "9602"
           PUID: "1000"
           PGID: "1000"
           VISLEX_TAG: latest
@@ -101,29 +101,44 @@ jobs:
         run: |
           runtime_dir="$(mktemp -d)"
           mkdir -p "$runtime_dir/input" "$runtime_dir/output" "$runtime_dir/data"
+
+          wait_for_health() {
+            port="$1"
+            healthy=false
+            for attempt in $(seq 1 30); do
+              if docker exec "$container_id" python -c \
+                "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/healthz', timeout=3)"; then
+                healthy=true
+                break
+              fi
+              sleep 1
+            done
+            if [ "$healthy" != true ]; then
+              docker logs "$container_id"
+              docker stop "$container_id"
+              return 1
+            fi
+          }
+
+          container_id="$(docker run -d --rm \
+            -v "$runtime_dir/input:/app/input" \
+            -v "$runtime_dir/output:/app/output" \
+            -v "$runtime_dir/data:/app/data" \
+            vislex:test)"
+          wait_for_health 9602
+          docker exec "$container_id" python -c \
+            'from pathlib import Path; status=Path("/proc/1/status").read_text(); assert "Uid:\t10001\t10001\t10001\t10001" in status; assert "Gid:\t10001\t10001\t10001\t10001" in status'
+          docker stop "$container_id"
+
           container_id="$(docker run -d --rm \
             -e UVICORN_PORT=9090 \
             -v "$runtime_dir/input:/app/input" \
             -v "$runtime_dir/output:/app/output" \
             -v "$runtime_dir/data:/app/data" \
             vislex:test)"
-          healthy=false
-          for attempt in $(seq 1 30); do
-            if docker exec "$container_id" python -c \
-              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9090/healthz', timeout=3)"; then
-              healthy=true
-              break
-            fi
-            sleep 1
-          done
-          if [ "$healthy" != true ]; then
-            docker logs "$container_id"
-            docker stop "$container_id"
-            exit 1
-          fi
-          docker exec "$container_id" python -c \
-            'from pathlib import Path; status=Path("/proc/1/status").read_text(); assert "Uid:\t10001\t10001\t10001\t10001" in status; assert "Gid:\t10001\t10001\t10001\t10001" in status'
+          wait_for_health 9090
           docker stop "$container_id"
+
           docker run --rm \
             --entrypoint python \
             --user 0:0 \

@@ -94,7 +94,7 @@ if [ ! -f "$compose_path" ]; then
             awk '$1 == "image:" { print $2; exit }'
     )"
     case "$resolved_image" in
-        shaundcn/vislex:1.1.1 | docker.io/shaundcn/vislex:1.1.1) ;;
+        shaundcn/vislex:1.1.2 | docker.io/shaundcn/vislex:1.1.2) ;;
         *) fail "Compose YAML 使用了非预期镜像：${resolved_image:-未知}" ;;
     esac
 
@@ -112,19 +112,29 @@ compose() {
 compose pull
 compose up -d
 
+service_port="$(
+    compose exec -T vislex python -c \
+        "import os; print(os.getenv('UVICORN_PORT', ''))" \
+        2>/dev/null || true
+)"
+case "$service_port" in
+    '' | *[!0-9]*)
+        service_port=""
+        for candidate_port in 9602 8000; do
+            if [ -n "$(compose port vislex "$candidate_port" 2>/dev/null || true)" ]; then
+                service_port="$candidate_port"
+                break
+            fi
+        done
+        [ -n "$service_port" ] || service_port=9602
+        ;;
+esac
+
 attempt=0
 while [ "$attempt" -lt 30 ]; do
     if compose exec -T vislex python -c \
-        "import os, urllib.request; port=os.getenv('UVICORN_PORT', '8000'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=3)" \
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${service_port}/healthz', timeout=3)" \
         >/dev/null 2>&1; then
-        service_port="$(
-            compose exec -T vislex python -c \
-                "import os; print(os.getenv('UVICORN_PORT', '8000'))" \
-                2>/dev/null || true
-        )"
-        case "$service_port" in
-            '' | *[!0-9]*) service_port=8000 ;;
-        esac
         published="$(compose port vislex "$service_port" 2>/dev/null || true)"
         published_port="${published##*:}"
         case "$published_port" in

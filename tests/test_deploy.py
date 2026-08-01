@@ -29,9 +29,9 @@ class DeploymentArtifactTests(unittest.TestCase):
             compose,
             """services:
   vislex:
-    image: shaundcn/vislex:1.1.1
+    image: shaundcn/vislex:1.1.2
     ports:
-      - "8000:8000"
+      - "9602:9602"
     volumes:
       - ./输入文件夹:/app/input
       - ./输出文件夹:/app/output
@@ -60,7 +60,7 @@ class DeploymentArtifactTests(unittest.TestCase):
             )
 
             first = self._run_installer(environment)
-            self.assertIn("http://NAS局域网IP:8000/", first.stdout)
+            self.assertIn("http://NAS局域网IP:9602/", first.stdout)
             self.assertFalse((install_dir / ".env").exists())
             self.assertTrue((install_dir / "compose.yaml").is_file())
             self.assertEqual(
@@ -80,7 +80,7 @@ class DeploymentArtifactTests(unittest.TestCase):
                 handle.write("# existing compose preserved\n")
 
             second = self._run_installer(environment)
-            self.assertIn("http://NAS局域网IP:8000/", second.stdout)
+            self.assertIn("http://NAS局域网IP:9602/", second.stdout)
             self.assertEqual(sentinel.read_bytes(), b"keep")
             self.assertIn(
                 "# existing compose preserved",
@@ -126,6 +126,32 @@ class DeploymentArtifactTests(unittest.TestCase):
             self.assertIn("${VISLEX_OUTPUT_DIR:-./output}", installed)
             self.assertIn("${VISLEX_DATA_DIR:-./data}", installed)
             self.assertFalse((install_dir / "输入文件夹").exists())
+
+    def test_installer_detects_legacy_internal_port(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            self._write_fake_commands(fake_bin)
+            install_dir = root / "vislex"
+            install_dir.mkdir()
+            (install_dir / "compose.yaml").write_text(
+                "services:\n  vislex:\n    image: shaundcn/vislex:1.1.1\n",
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "HOME": str(root),
+                    "VISLEX_DIR": str(install_dir),
+                    "FAKE_SERVICE_PORT": "8000",
+                }
+            )
+
+            result = self._run_installer(environment)
+
+            self.assertIn("http://NAS局域网IP:8000/", result.stdout)
 
     def test_ci_cleans_identity_fixture_with_a_root_container(self):
         workflow = (
@@ -193,16 +219,17 @@ class DeploymentArtifactTests(unittest.TestCase):
         )
         self.assertNotIn("\nUSER 10001:10001", dockerfile)
 
-    def test_patch_release_version_is_1_1_1(self):
+    def test_patch_release_version_is_1_1_2(self):
         dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("ARG VISLEX_VERSION=1.1.1", dockerfile)
-        self.assertIn("当前源码版本：`1.1.1`", readme)
-        self.assertIn("shaundcn/vislex:1.1.1", readme)
+        self.assertIn("ARG VISLEX_VERSION=1.1.2", dockerfile)
+        self.assertIn("当前源码版本：`1.1.2`", readme)
+        self.assertIn("shaundcn/vislex:1.1.2", readme)
 
     def test_dockerfile_allows_uvicorn_port_override(self):
         dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("EXPOSE 8000", dockerfile)
+        self.assertIn("UVICORN_PORT=9602", dockerfile)
+        self.assertIn("EXPOSE 9602", dockerfile)
         command = dockerfile.split("CMD ", 1)[1]
         self.assertNotIn('"--port"', command)
 
@@ -278,7 +305,11 @@ if [ "${1:-}" = "compose" ]; then
             exit 0
             ;;
         *" config "*)
-            printf 'services:\\n  vislex:\\n    image: shaundcn/vislex:1.1.1\\n'
+            printf 'services:\\n  vislex:\\n    image: shaundcn/vislex:1.1.2\\n'
+            exit 0
+            ;;
+        *" port vislex ${FAKE_SERVICE_PORT:-9602} "*)
+            printf '0.0.0.0:%s\\n' "${FAKE_SERVICE_PORT:-9602}"
             exit 0
             ;;
         *)

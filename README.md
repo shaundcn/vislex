@@ -10,7 +10,7 @@ Markdown 平铺写入 `output`。
 公开镜像为 `docker.io/shaundcn/vislex`，支持 Linux amd64 和 arm64。Linux
 服务器可以只下载部署 YAML 运行，不需要克隆源码仓库。
 
-当前源码版本：`1.1.1`。Docker Hub 稳定版本：`1.1.1`。
+当前源码版本：`1.1.2`。Docker Hub 稳定版本：`1.1.2`。
 
 ## 技术与限制
 
@@ -63,16 +63,16 @@ YAML 内容保持极简：
 ```yaml
 services:
   vislex:
-    image: shaundcn/vislex:1.1.1
+    image: shaundcn/vislex:1.1.2
     ports:
-      - "8000:8000"
+      - "9602:9602"
     volumes:
       - ./输入文件夹:/app/input
       - ./输出文件夹:/app/output
       - ./数据文件夹:/app/data
 ```
 
-宿主机和容器统一使用 `8000`，默认目录是 Compose 项目目录下的
+宿主机和容器统一使用 `9602`，默认目录是 Compose 项目目录下的
 `输入文件夹/输出文件夹/数据文件夹`。NAS 已有目录只需替换每条挂载冒号左侧的路径，
 例如：
 
@@ -102,14 +102,14 @@ curl -fsSL https://raw.githubusercontent.com/shaundcn/vislex/main/deploy/compose
 docker compose -f compose.yaml up -d
 ```
 
-访问地址为 `http://NAS局域网IP:8000/`。`8000:8000` 会监听 NAS 的全部网络接口；
+访问地址为 `http://NAS局域网IP:9602/`。`9602:9602` 会监听 NAS 的全部网络接口；
 这个简化 YAML 只用于可信局域网或登录后的 FNConnect，禁止公网端口转发、公共反向
 代理或直接暴露公网。它不包含自动拉取、自动重启、健康检查、`init`、固定运行用户、
 只读根文件系统或额外容器安全限制。
 
 ### FNConnect
 
-先在 FNConnect 中登录 NAS，再进入 fnOS 的 Docker 页面并点击 Vislex 的 `8000`
+先在 FNConnect 中登录 NAS，再进入 fnOS 的 Docker 页面并点击 Vislex 的 `9602`
 映射端口。Vislex 不需要配置 FNConnect 域名，也不检查请求的 Host；访问控制完全依赖
 NAS/FNConnect，因此不要把代理地址作为无保护的公开站点分享。
 
@@ -143,13 +143,13 @@ Docker Desktop 用户级 CLI 未进入当前 PATH 时，请使用登录 shell：
 mkdir -p input output data
 zsh -lc 'docker compose up -d --build'
 zsh -lc 'docker compose ps'
-curl --fail --silent --show-error http://127.0.0.1:8080/healthz
+curl --fail --silent --show-error http://127.0.0.1:9602/healthz
 ```
 
 默认地址：
 
-- 任务页：<http://127.0.0.1:8080/>
-- 设置页：<http://127.0.0.1:8080/settings>
+- 任务页：<http://127.0.0.1:9602/>
+- 设置页：<http://127.0.0.1:9602/settings>
 
 健康响应为：
 
@@ -172,7 +172,7 @@ API Key 原子写入 `data/ark_api_key` 并设置为 `0600`。网页只展示首
 
 ## 自动处理
 
-源码 `1.1.1` 的扫描器每30秒检查 `input` 顶层及最多3层非隐藏子目录中的普通文件，
+源码 `1.1.2` 的扫描器每30秒检查 `input` 顶层及最多3层非隐藏子目录中的普通文件，
 例如会扫描 `input/一层/二层/三层/视频.mp4`，不会进入第4层子目录。文件大小和纳秒
 修改时间连续60秒不变后建立任务。隐藏文件、隐藏目录和符号链接不会被跟随；任务页和
 Markdown 中的“原文件名”对嵌套视频显示相对于 `input` 的路径，便于区分同名文件。
@@ -270,13 +270,14 @@ docker compose -f compose.yaml pull
 docker compose -f compose.yaml up -d
 ```
 
+从 `1.1.1` 升级到 `1.1.2` 时，还要把端口映射两侧从 `8000` 同时改为 `9602`。
 升级或回滚时，编辑 `compose.yaml` 的镜像标签并重新创建容器。上一稳定版本为
-`shaundcn/vislex:1.1.0`：
+`shaundcn/vislex:1.1.1`：
 
 ```yaml
 services:
   vislex:
-    image: shaundcn/vislex:1.1.0
+    image: shaundcn/vislex:1.1.1
 ```
 
 停止并删除容器但保留视频、Markdown、数据库和设置：
@@ -296,7 +297,7 @@ docker compose -f compose.yaml down
 
 ```dotenv
 HOST_BIND_IP=192.168.31.65
-HOST_PORT=8080
+HOST_PORT=9602
 PUID=501
 PGID=20
 ```
@@ -335,7 +336,7 @@ zsh -lc 'docker compose ps'
 set -a
 [ ! -f .env ] || . ./.env
 set +a
-VISLEX_URL="http://${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-8080}"
+VISLEX_URL="http://${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-9602}"
 curl --fail --silent --show-error "${VISLEX_URL}/healthz"
 curl --fail --silent --show-error "${VISLEX_URL}/" >/dev/null
 curl --fail --silent --show-error "${VISLEX_URL}/settings" >/dev/null
@@ -352,4 +353,4 @@ curl --fail --silent --show-error "${VISLEX_URL}/settings" >/dev/null
 - 模型出现在列表但任务失败：列表不做能力过滤，请在设置页使用“测试”确认所选模型
   支持视频 Files + Responses。
 - FNConnect 返回502：确认从已登录的fnOS Docker页面进入，并检查端口映射的左右两侧
-  是否相同；公开YAML应显示 `8000:8000`。
+  是否相同；公开YAML应显示 `9602:9602`。

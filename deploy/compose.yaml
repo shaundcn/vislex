@@ -1,8 +1,8 @@
 services:
   vislex:
-    image: shaundcn/vislex:1.1.1
+    image: shaundcn/vislex:1.1.2
     ports:
-      - "8000:8000"
+      - "9602:9602"
     volumes:
       - ./输入文件夹:/app/input
       - ./输出文件夹:/app/output

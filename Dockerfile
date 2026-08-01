@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN groupadd --gid 10001 vislex \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin vislex
 
-ARG VISLEX_VERSION=1.1.1
+ARG VISLEX_VERSION=1.1.2
 ARG VISLEX_REVISION=unknown
 
 LABEL org.opencontainers.image.title="Vislex" \
@@ -31,7 +31,9 @@ COPY --chown=10001:10001 app ./app
 RUN mkdir -p /app/input /app/output /app/data \
     && chown -R 10001:10001 /app/input /app/output /app/data
 
-EXPOSE 8000
+ENV UVICORN_PORT=9602
+
+EXPOSE 9602
 
 ENTRYPOINT ["python", "-m", "app.entrypoint"]
 
