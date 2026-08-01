@@ -29,7 +29,7 @@ class DeploymentArtifactTests(unittest.TestCase):
             compose,
             """services:
   vislex:
-    image: shaundcn/vislex:1.1.2
+    image: shaundcn/vislex:1.1.3
     ports:
       - "9602:9602"
     volumes:
@@ -219,12 +219,16 @@ class DeploymentArtifactTests(unittest.TestCase):
         )
         self.assertNotIn("\nUSER 10001:10001", dockerfile)
 
-    def test_patch_release_version_is_1_1_2(self):
+    def test_release_artifacts_use_1_1_3(self):
         dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("ARG VISLEX_VERSION=1.1.2", dockerfile)
-        self.assertIn("当前源码版本：`1.1.2`", readme)
-        self.assertIn("shaundcn/vislex:1.1.2", readme)
+        compose = (PROJECT_ROOT / "deploy" / "compose.yaml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("ARG VISLEX_VERSION=1.1.3", dockerfile)
+        self.assertIn("当前源码版本：`1.1.3`", readme)
+        self.assertIn("Docker Hub 稳定版本：`1.1.3`", readme)
+        self.assertIn("shaundcn/vislex:1.1.3", compose)
 
     def test_dockerfile_allows_uvicorn_port_override(self):
         dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
@@ -305,7 +309,7 @@ if [ "${1:-}" = "compose" ]; then
             exit 0
             ;;
         *" config "*)
-            printf 'services:\\n  vislex:\\n    image: shaundcn/vislex:1.1.2\\n'
+            printf 'services:\\n  vislex:\\n    image: shaundcn/vislex:1.1.3\\n'
             exit 0
             ;;
         *" port vislex ${FAKE_SERVICE_PORT:-9602} "*)

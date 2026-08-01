@@ -13,6 +13,8 @@ from .config import validate_fps
 from .defaults import ACTIVE_STATUSES, DEFAULT_PROMPT, TASK_STATUSES
 
 
+DATABASE_SCHEMA_VERSION = 1
+
 TASK_MUTABLE_FIELDS = {
     "duration_seconds",
     "status",
@@ -22,6 +24,7 @@ TASK_MUTABLE_FIELDS = {
     "video_fps_snapshot",
     "remote_file_id",
     "response_json",
+    "markdown_created_date",
     "final_stem",
     "video_output_path",
     "md_output_path",
@@ -34,6 +37,88 @@ TASK_MUTABLE_FIELDS = {
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _create_business_schema(
+    connection: sqlite3.Connection, statuses: str
+) -> None:
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY,
+            signature TEXT NOT NULL UNIQUE,
+            source_path TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            extension TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            mtime_ns INTEGER NOT NULL,
+            device INTEGER NOT NULL,
+            inode INTEGER NOT NULL,
+            duration_seconds REAL,
+            status TEXT NOT NULL CHECK (status IN ({statuses})),
+            error TEXT,
+            prompt_snapshot TEXT,
+            model_snapshot TEXT,
+            video_fps_snapshot REAL,
+            remote_file_id TEXT,
+            response_json TEXT,
+            markdown_created_date TEXT,
+            final_stem TEXT,
+            video_output_path TEXT,
+            md_output_path TEXT,
+            video_sha256 TEXT,
+            md_sha256 TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_tasks_status_created
+        ON tasks(status, created_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_tasks_source
+        ON tasks(source_path)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _validate_current_schema(connection: sqlite3.Connection) -> None:
+    task_columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
+    }
+    required = {
+        "id",
+        "signature",
+        "source_path",
+        "original_name",
+        "status",
+        "response_json",
+        "markdown_created_date",
+        "video_output_path",
+        "md_output_path",
+        "created_at",
+        "updated_at",
+    }
+    if not required.issubset(task_columns):
+        raise RuntimeError("数据库结构不完整，拒绝启动")
 
 
 class Database:
@@ -56,61 +141,15 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         statuses = ",".join(f"'{status}'" for status in TASK_STATUSES)
         with self.connect() as connection:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.executescript(
-                f"""
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id INTEGER PRIMARY KEY,
-                    signature TEXT NOT NULL UNIQUE,
-                    source_path TEXT NOT NULL,
-                    original_name TEXT NOT NULL,
-                    extension TEXT NOT NULL,
-                    size_bytes INTEGER NOT NULL,
-                    mtime_ns INTEGER NOT NULL,
-                    device INTEGER NOT NULL,
-                    inode INTEGER NOT NULL,
-                    duration_seconds REAL,
-                    status TEXT NOT NULL CHECK (status IN ({statuses})),
-                    error TEXT,
-                    prompt_snapshot TEXT,
-                    model_snapshot TEXT,
-                    video_fps_snapshot REAL,
-                    remote_file_id TEXT,
-                    response_json TEXT,
-                    final_stem TEXT,
-                    video_output_path TEXT,
-                    md_output_path TEXT,
-                    video_sha256 TEXT,
-                    md_sha256 TEXT,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    started_at TEXT,
-                    completed_at TEXT
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_tasks_status_created
-                    ON tasks(status, created_at);
-                CREATE INDEX IF NOT EXISTS idx_tasks_source
-                    ON tasks(source_path);
-
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                """
-            )
-            task_columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
-            }
-            if "markdown_draft" in task_columns:
-                connection.execute("ALTER TABLE tasks DROP COLUMN markdown_draft")
-                task_columns.remove("markdown_draft")
-            for column in ("video_sha256", "md_sha256"):
-                if column not in task_columns:
-                    connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
+            version_row = connection.execute("PRAGMA user_version").fetchone()
+            version = int(version_row[0]) if version_row else 0
+            if version > DATABASE_SCHEMA_VERSION:
+                raise RuntimeError("数据库版本高于当前程序，拒绝降级启动")
+            journal_mode = connection.execute(
+                "PRAGMA journal_mode = WAL"
+            ).fetchone()
+            if not journal_mode or str(journal_mode[0]).casefold() != "wal":
+                raise RuntimeError("数据库无法启用 WAL，拒绝启动")
             now = utc_now()
             defaults = {
                 "prompt": DEFAULT_PROMPT,
@@ -120,14 +159,24 @@ class Database:
                 "models_updated_at": "",
                 "csrf_secret": secrets.token_urlsafe(48),
             }
-            connection.executemany(
-                """
-                INSERT OR IGNORE INTO settings(key, value, updated_at)
-                VALUES (?, ?, ?)
-                """,
-                [(key, value, now) for key, value in defaults.items()],
-            )
-            connection.commit()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                _create_business_schema(connection, statuses)
+                connection.executemany(
+                    """
+                    INSERT OR IGNORE INTO settings(key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    [(key, value, now) for key, value in defaults.items()],
+                )
+                _validate_current_schema(connection)
+                connection.execute(
+                    f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}"
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
     def health_check(self) -> bool:
         try:
@@ -407,6 +456,7 @@ class Database:
                     model_snapshot = NULL,
                     video_fps_snapshot = NULL,
                     response_json = NULL,
+                    markdown_created_date = NULL,
                     final_stem = NULL,
                     video_output_path = NULL,
                     md_output_path = NULL,

@@ -11,6 +11,7 @@ import re
 import secrets
 import stat
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -119,7 +120,10 @@ def render_content_markdown(value: str) -> str:
 
 
 def render_markdown(
-    analysis: VideoAnalysis, video_filename: str, original_filename: str
+    analysis: VideoAnalysis,
+    video_filename: str,
+    original_filename: str,
+    created_date: str,
 ) -> str:
     if (
         Path(video_filename).name != video_filename
@@ -127,11 +131,21 @@ def render_markdown(
         or any(ord(character) < 32 or ord(character) == 127 for character in video_filename)
     ):
         raise MediaError("视频文件名不能安全写入 Markdown")
+    try:
+        parsed_date = date.fromisoformat(created_date)
+    except ValueError as exc:
+        raise MediaError("Markdown 建立日期格式无效") from exc
+    if parsed_date.isoformat() != created_date:
+        raise MediaError("Markdown 建立日期必须使用 YYYY-MM-DD 格式")
+    source_filename = original_filename.rsplit("/", 1)[-1]
+    if not source_filename:
+        raise MediaError("视频原文件名不能为空")
     lines = [
         "---",
-        f"文件名: {json.dumps(video_filename, ensure_ascii=False)}",
-        f"原文件名: {json.dumps(original_filename, ensure_ascii=False)}",
+        f"title: {json.dumps(analysis.title, ensure_ascii=False)}",
         "tags:",
+        f"source: {json.dumps(source_filename, ensure_ascii=False)}",
+        f"created: {created_date}",
         "---",
         "",
         f"![[{video_filename}]]",

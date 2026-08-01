@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-NEW_FILENAME_PATTERN = re.compile(
+TITLE_PATTERN = re.compile(
     r"^[A-Za-z0-9\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF"
     r"\U00020000-\U0002EBEF]+$"
 )
@@ -23,21 +23,23 @@ VIDEO_FILENAME_EXTENSIONS = (
     ".mpg",
     ".ts",
 )
-MODEL_OUTPUT_FIELDS = ("new_filename", "content", "transcript")
+MODEL_OUTPUT_FIELDS = ("title", "content", "transcript")
 
 
 def normalize_model_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = {
         field: payload[field] for field in MODEL_OUTPUT_FIELDS if field in payload
     }
-    filename = normalized.get("new_filename")
-    if isinstance(filename, str):
-        candidate = filename.strip()
+    if "new_filename" in payload:
+        normalized["new_filename"] = payload["new_filename"]
+    title = normalized.get("title")
+    if isinstance(title, str):
+        candidate = title.strip()
         unsafe = any(
             character in {"/", "\\"}
             or ord(character) < 32
             or ord(character) == 127
-            for character in filename
+            for character in title
         )
         if not unsafe:
             lowered = candidate.casefold()
@@ -48,9 +50,9 @@ def normalize_model_payload(payload: dict[str, Any]) -> dict[str, Any]:
             candidate = "".join(
                 character
                 for character in candidate
-                if NEW_FILENAME_PATTERN.fullmatch(character)
+                if TITLE_PATTERN.fullmatch(character)
             )
-            normalized["new_filename"] = candidate[:20]
+            normalized["title"] = candidate[:20]
 
     transcript = normalized.get("transcript")
     if isinstance(transcript, str):
@@ -67,17 +69,17 @@ def normalize_model_payload(payload: dict[str, Any]) -> dict[str, Any]:
 class VideoAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    new_filename: str = Field(min_length=1, max_length=20)
+    title: str = Field(min_length=1, max_length=20)
     content: str = Field(min_length=1)
     transcript: list[str]
 
-    @field_validator("new_filename")
+    @field_validator("title")
     @classmethod
-    def validate_new_filename(cls, value: str) -> str:
+    def validate_title(cls, value: str) -> str:
         if value != value.strip():
-            raise ValueError("new_filename 首尾不能包含空白")
-        if not NEW_FILENAME_PATTERN.fullmatch(value):
-            raise ValueError("new_filename 只能包含中文、英文字母或数字")
+            raise ValueError("title 首尾不能包含空白")
+        if not TITLE_PATTERN.fullmatch(value):
+            raise ValueError("title 只能包含中文、英文字母或数字")
         return value
 
     @field_validator("content")

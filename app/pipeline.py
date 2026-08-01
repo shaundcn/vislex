@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from .ark import (
     parse_model_json,
     read_api_key,
 )
-from .config import AppConfig
+from .config import CHINA_TIMEZONE, AppConfig
 from .db import Database, utc_now
 from .media import (
     MediaError,
@@ -124,18 +125,23 @@ class TaskProcessor:
 
             final_stem = choose_output_stem(
                 self.config.output_dir,
-                analysis.new_filename,
+                analysis.title,
                 extension,
             )
             final_video = self.config.output_dir / (final_stem + extension)
             final_markdown = self.config.output_dir / f"{final_stem}.md"
+            created_date = current_markdown_date()
             markdown = render_markdown(
-                analysis, final_video.name, str(task["original_name"])
+                analysis,
+                final_video.name,
+                str(task["original_name"]),
+                created_date,
             )
             self.database.update_task(
                 task_id,
                 status="moving",
                 response_json=analysis.model_dump_json(),
+                markdown_created_date=created_date,
                 final_stem=final_stem,
                 video_output_path=str(final_video),
                 md_output_path=str(final_markdown),
@@ -211,7 +217,10 @@ class TaskProcessor:
         except (json.JSONDecodeError, ValidationError) as exc:
             raise MediaError("保存的模型结果无法用于恢复") from exc
         markdown = render_markdown(
-            analysis, video_path.name, str(task["original_name"])
+            analysis,
+            video_path.name,
+            str(task["original_name"]),
+            _stored_markdown_date(task),
         )
         if outputs_complete(task, video_path, markdown_path):
             if source.exists() or source.is_symlink():
@@ -400,7 +409,10 @@ def retry_failed_task(
             if video_path is None or markdown_path is None:
                 return False, "保存的输出路径不安全"
             expected_markdown = render_markdown(
-                analysis, video_path.name, str(task["original_name"])
+                analysis,
+                video_path.name,
+                str(task["original_name"]),
+                _stored_markdown_date(task),
             )
             if source.exists() or source.is_symlink():
                 if not source_matches_task(source, task):
@@ -442,13 +454,25 @@ def _safe_error(error: BaseException, api_key: str = "") -> str:
     return value[:4000] or type(error).__name__
 
 
+def current_markdown_date() -> str:
+    return datetime.now(CHINA_TIMEZONE).date().isoformat()
+
+
+def _stored_markdown_date(task: Any) -> str:
+    value = str(task["markdown_created_date"] or "")
+    if not value:
+        raise MediaError("任务缺少 Markdown 建立日期")
+    return value
+
+
 def _repair_prompt(prompt: str, error: str) -> str:
     compact_error = " ".join(error.replace("\x00", " ").split())[:800]
+    compact_error = compact_error.replace("new_filename", "旧版字段")
     return (
         f"{prompt}\n\n"
         "输出纠错要求：上一次输出未通过机器校验。"
         f"错误是：{compact_error or '返回格式不符合要求'}。"
         "请重新理解同一视频，只返回一个合法 JSON 对象；"
         "不要使用 Markdown 代码块、解释文字或额外字段。"
-        "必须包含 new_filename、content、transcript 三个字段。"
+        "必须包含 title、content、transcript 三个字段。"
     )

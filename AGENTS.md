@@ -30,15 +30,13 @@
 
 ## 当前状态与下一步
 
-- 截至 2026-08-01，当前稳定版本为 `1.1.2`，默认端口为 `9602`。源码和公开 NAS
-  YAML 使用相同的内外9602端口，中文相对目录及旧版8000端口安装器兼容逻辑保留。
-  编译、63项测试、Compose校验、默认9602与覆盖9090容器验证均已通过；SQLite架构
-  未修改，真实方舟API未调用。
-- GitHub 公开仓库为 `shaundcn/vislex`；实现提交为 `88b3708`，发布标签为
-  `v1.1.2`，main与标签工作流均成功。
-- Docker Hub 的 `shaundcn/vislex:1.1.2` 与 `latest` 共享 manifest digest
-  `sha256:897e280ccaf60fb0d75f0bed61fbea8c519e999550c56cd52b7a9e82280e3988`，包含
-  `linux/amd64` 和 `linux/arm64`；匿名清单请求及两种架构的9602 `/healthz` 均通过。
+- 截至 2026-08-02，当前源码和公开部署版本为 `1.1.3`。`1.1.3` 将模型
+  JSON 字段改为 `title/content/transcript`，
+  使用新 Markdown frontmatter。数据库按全新安装设计：只创建缺失的
+  `tasks/settings` 及默认设置，不包含清库、删表或设置重置逻辑。
+- GitHub 标签 `v1.1.3` 触发 Docker Hub 多架构发布，公开部署 YAML 使用
+  `shaundcn/vislex:1.1.3`。
 - 在线安装入口和镜像式 Compose 位于 `deploy/`；新安装创建中文目录，已有 Compose、
   `.env` 和旧英文数据目录保持原样。
-- 后续修改先运行 README 中的验证，再按用户明确要求提交或推送。
+- 本轮只允许本地实现和隔离验证，未经用户后续明确指令不得提交、推送、
+  打标签或更新 Docker Hub。

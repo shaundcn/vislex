@@ -94,7 +94,7 @@ if [ ! -f "$compose_path" ]; then
             awk '$1 == "image:" { print $2; exit }'
     )"
     case "$resolved_image" in
-        shaundcn/vislex:1.1.2 | docker.io/shaundcn/vislex:1.1.2) ;;
+        shaundcn/vislex:1.1.3 | docker.io/shaundcn/vislex:1.1.3) ;;
         *) fail "Compose YAML 使用了非预期镜像：${resolved_image:-未知}" ;;
     esac
 

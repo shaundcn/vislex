@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN groupadd --gid 10001 vislex \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin vislex
 
-ARG VISLEX_VERSION=1.1.2
+ARG VISLEX_VERSION=1.1.3
 ARG VISLEX_REVISION=unknown
 
 LABEL org.opencontainers.image.title="Vislex" \

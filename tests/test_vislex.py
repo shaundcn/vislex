@@ -8,6 +8,7 @@ import stat
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,8 +28,9 @@ from app.ark import (
     read_api_key,
     save_api_key,
 )
-from app.config import AppConfig
-from app.db import Database
+from app.config import CHINA_TIMEZONE, AppConfig
+from app.db import DATABASE_SCHEMA_VERSION, Database
+from app.defaults import API_TEST_PROMPT, DEFAULT_PROMPT
 from app.main import _run_api_test, create_app
 from app.media import (
     MediaError,
@@ -47,6 +49,8 @@ from app.media import (
 from app.models import VideoAnalysis, normalize_model_payload
 from app.pipeline import (
     TaskProcessor,
+    _repair_prompt,
+    current_markdown_date,
     recover_interrupted_tasks,
     recover_quarantined_sources,
     request_valid_analysis,
@@ -97,19 +101,30 @@ def add_task(database: Database, path: Path) -> int:
 
 
 class ModelAndMarkdownTests(unittest.TestCase):
+    def test_built_in_prompts_use_only_the_title_contract(self):
+        repair = _repair_prompt(DEFAULT_PROMPT, "new_filename: 多余字段")
+        for name, prompt in (
+            ("default", DEFAULT_PROMPT),
+            ("api-test", API_TEST_PROMPT),
+            ("repair", repair),
+        ):
+            with self.subTest(prompt=name):
+                self.assertIn("title", prompt)
+                self.assertNotIn("new_filename", prompt)
+
     def test_strict_model_accepts_only_contract(self):
         analysis = VideoAnalysis.model_validate(
             {
-                "new_filename": "中文Title123",
+                "title": "中文Title123",
                 "content": "主要内容。\n\n- 第一点。",
                 "transcript": [],
             }
         )
-        self.assertEqual(analysis.new_filename, "中文Title123")
+        self.assertEqual(analysis.title, "中文Title123")
         with self.assertRaises(ValidationError):
             VideoAnalysis.model_validate(
                 {
-                    "new_filename": "bad/path",
+                    "title": "bad/path",
                     "content": "内容",
                     "transcript": [],
                 }
@@ -117,7 +132,7 @@ class ModelAndMarkdownTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             VideoAnalysis.model_validate(
                 {
-                    "new_filename": "标题",
+                    "title": "标题",
                     "content": "内容",
                     "transcript": [],
                     "extra": True,
@@ -126,7 +141,7 @@ class ModelAndMarkdownTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             VideoAnalysis.model_validate(
                 {
-                    "new_filename": "标题",
+                    "title": "标题",
                     "content": "内容",
                     "transcript": [""],
                 }
@@ -136,48 +151,48 @@ class ModelAndMarkdownTests(unittest.TestCase):
         analysis = VideoAnalysis.model_validate(
             normalize_model_payload(
                 {
-                    "new_filename": " #桌面_工作台-CyboPal.mp4 ",
+                    "title": " #桌面_工作台-CyboPal.mp4 ",
                     "content": "内容",
                     "transcript": [" 第一段 ", "", " \n", "第二段"],
                     "language": "zh",
                 }
             )
         )
-        self.assertEqual(analysis.new_filename, "桌面工作台CyboPal")
+        self.assertEqual(analysis.title, "桌面工作台CyboPal")
         self.assertEqual(analysis.transcript, ["第一段", "第二段"])
         self.assertEqual(
-            set(analysis.model_dump()), {"new_filename", "content", "transcript"}
+            set(analysis.model_dump()), {"title", "content", "transcript"}
         )
 
         string_transcript = VideoAnalysis.model_validate(
             normalize_model_payload(
                 {
-                    "new_filename": "标题.mov",
+                    "title": "标题.mov",
                     "content": "内容",
                     "transcript": "完整语音",
                 }
             )
         )
-        self.assertEqual(string_transcript.new_filename, "标题")
+        self.assertEqual(string_transcript.title, "标题")
         self.assertEqual(string_transcript.transcript, ["完整语音"])
 
         long_title = VideoAnalysis.model_validate(
             normalize_model_payload(
                 {
-                    "new_filename": "长" * 30,
+                    "title": "长" * 30,
                     "content": "内容",
                     "transcript": [],
                 }
             )
         )
-        self.assertEqual(long_title.new_filename, "长" * 20)
+        self.assertEqual(long_title.title, "长" * 20)
 
         for unsafe_filename in ("bad/path.mp4", "bad\\path.mp4", "bad\x00name"):
             with self.assertRaises(ValidationError):
                 VideoAnalysis.model_validate(
                     normalize_model_payload(
                         {
-                            "new_filename": unsafe_filename,
+                            "title": unsafe_filename,
                             "content": "内容",
                             "transcript": [],
                         }
@@ -186,22 +201,41 @@ class ModelAndMarkdownTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             VideoAnalysis.model_validate(
                 normalize_model_payload(
-                    {"new_filename": "标题", "transcript": []}
+                    {"title": "标题", "transcript": []}
                 )
             )
+
+        for legacy_payload in (
+            {
+                "new_filename": "旧标题",
+                "content": "内容",
+                "transcript": [],
+            },
+            {
+                "title": "新标题",
+                "new_filename": "旧标题",
+                "content": "内容",
+                "transcript": [],
+            },
+        ):
+            with self.subTest(payload=legacy_payload):
+                with self.assertRaises(ValidationError):
+                    VideoAnalysis.model_validate(
+                        normalize_model_payload(legacy_payload)
+                    )
 
     def test_duplicate_json_keys_are_rejected(self):
         with self.assertRaises(ArkJSONError):
             parse_model_json(
-                '{"new_filename":"甲","new_filename":"乙",'
+                '{"title":"甲","title":"乙",'
                 '"content":"内容","transcript":[]}'
             )
         fenced = parse_model_json(
             "```json\n"
-            '{"new_filename":"标题","content":"内容","transcript":[]}'
+            '{"title":"标题","content":"内容","transcript":[]}'
             "\n```"
         )
-        self.assertEqual(fenced["new_filename"], "标题")
+        self.assertEqual(fenced["title"], "标题")
         with self.assertRaises(ArkJSONError):
             parse_model_json("说明如下：\n```json\n{}\n```")
         with self.assertRaises(ArkJSONError):
@@ -209,15 +243,34 @@ class ModelAndMarkdownTests(unittest.TestCase):
 
     def test_markdown_escapes_model_text_but_keeps_dash_lists(self):
         analysis = VideoAnalysis(
-            new_filename="标题",
+            title="标题",
             content="<b>内容</b>\n\n- *列表* [链接](x)",
             transcript=["<script>alert(1)</script>"],
         )
-        output = render_markdown(analysis, "标题.mp4", '原"文件.mp4')
+        output = render_markdown(
+            analysis,
+            "标题-2.mp4",
+            '一层/二层/原"文件.mp4',
+            "2026-08-02",
+        )
+        self.assertTrue(
+            output.startswith(
+                '---\ntitle: "标题"\ntags:\n'
+                'source: "原\\"文件.mp4"\ncreated: 2026-08-02\n---\n'
+            )
+        )
+        self.assertIn("![[标题-2.mp4]]", output)
         self.assertIn("&lt;b&gt;内容&lt;/b&gt;", output)
         self.assertIn("- \\*列表\\* \\[链接\\]\\(x\\)", output)
         self.assertNotIn("<script>", output)
-        self.assertIn('原文件名: "原\\"文件.mp4"', output)
+        self.assertNotIn("一层/二层", output)
+
+    def test_markdown_date_uses_the_china_timezone(self):
+        fixed = datetime(2026, 8, 2, 0, 1, tzinfo=CHINA_TIMEZONE)
+        with patch("app.pipeline.datetime") as clock:
+            clock.now.return_value = fixed
+            self.assertEqual(current_markdown_date(), "2026-08-02")
+            clock.now.assert_called_once_with(CHINA_TIMEZONE)
 
     def test_collision_suffix_keeps_twenty_character_stem(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -236,12 +289,18 @@ class ModelAndMarkdownTests(unittest.TestCase):
             with self.assertRaises(MediaError):
                 validate_output_extension(extension)
         analysis = VideoAnalysis(
-            new_filename="标题", content="内容", transcript=[]
+            title="标题", content="内容", transcript=[]
         )
         with self.assertRaises(MediaError):
             render_markdown(
-                analysis, "标题.mp4]]\n# 注入", "原文件.mp4"
+                analysis, "标题.mp4]]\n# 注入", "原文件.mp4", "2026-08-02"
             )
+        for invalid_date in ("20260802", "2026-8-2", "2026-02-30"):
+            with self.subTest(created=invalid_date):
+                with self.assertRaises(MediaError):
+                    render_markdown(
+                        analysis, "标题.mp4", "原文件.mp4", invalid_date
+                    )
 
 
 class DatabaseAndScannerTests(unittest.TestCase):
@@ -413,6 +472,9 @@ class DatabaseAndScannerTests(unittest.TestCase):
             self.assertEqual(first["prompt_snapshot"], "prompt-a")
             self.assertEqual(first["video_fps_snapshot"], 0.3)
             database.update_task(task_id, remote_file_id="file-pending")
+            database.update_task(
+                task_id, markdown_created_date="2026-08-01"
+            )
             database.mark_failed(task_id, "expected")
             database.set_settings(
                 {"model_id": "model-b", "video_fps": "1.2", "prompt": "prompt-b"}
@@ -423,6 +485,7 @@ class DatabaseAndScannerTests(unittest.TestCase):
             self.assertEqual(second["prompt_snapshot"], "prompt-b")
             self.assertEqual(second["video_fps_snapshot"], 1.2)
             self.assertEqual(second["remote_file_id"], "file-pending")
+            self.assertIsNone(second["markdown_created_date"])
 
     def test_wal_and_only_two_business_tables(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -430,42 +493,90 @@ class DatabaseAndScannerTests(unittest.TestCase):
             database = create_db(config)
             self.assertEqual(database.journal_mode(), "wal")
             with database.connect() as connection:
+                version = int(
+                    connection.execute("PRAGMA user_version").fetchone()[0]
+                )
                 names = {
                     row[0]
                     for row in connection.execute(
                         "SELECT name FROM sqlite_master WHERE type='table'"
                     ).fetchall()
                 }
-            self.assertEqual(names, {"tasks", "settings"})
-
-    def test_removed_markdown_draft_column_is_migrated_without_losing_task(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            config = make_config(Path(temporary))
-            database = create_db(config)
-            source = config.input_dir / "legacy.mp4"
-            source.write_bytes(b"legacy")
-            task_id = add_task(database, source)
-            with database.connect() as connection:
-                connection.execute(
-                    "ALTER TABLE tasks ADD COLUMN markdown_draft TEXT"
-                )
-                connection.execute(
-                    "UPDATE tasks SET markdown_draft = ? WHERE id = ?",
-                    ("obsolete", task_id),
-                )
-                connection.commit()
-            database.initialize()
-            with database.connect() as connection:
                 columns = {
-                    row["name"]
+                    str(row["name"])
                     for row in connection.execute(
                         "PRAGMA table_info(tasks)"
                     ).fetchall()
                 }
-            self.assertNotIn("markdown_draft", columns)
-            self.assertEqual(
-                database.get_task(task_id)["original_name"], "legacy.mp4"
+            self.assertEqual(version, DATABASE_SCHEMA_VERSION)
+            self.assertEqual(names, {"tasks", "settings"})
+            self.assertIn("markdown_created_date", columns)
+
+    def test_initialize_preserves_existing_tasks_settings_and_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = make_config(root)
+            database = create_db(config)
+            api_key = config.data_dir / "ark_api_key"
+            unrelated_data = config.data_dir / "keep.bin"
+            output = config.output_dir / "已有归档.md"
+            output_video = config.output_dir / "已有归档.mp4"
+            video_directory = root / "video"
+            video_directory.mkdir()
+            video_fixture = video_directory / "keep.mp4"
+            source = config.input_dir / "source.mp4"
+            source.write_bytes(b"video")
+            output.write_text("existing output", encoding="utf-8")
+            output_video.write_bytes(b"existing video")
+            api_key.write_text("secret", encoding="utf-8")
+            unrelated_data.write_bytes(b"keep")
+            video_fixture.write_bytes(b"video")
+            task_id = add_task(database, source)
+            previous_csrf = database.get_setting("csrf_secret")
+            database.set_settings(
+                {
+                    "prompt": "custom prompt",
+                    "model_id": "custom-model",
+                    "video_fps": "1.2",
+                    "models_json": '["custom-model"]',
+                }
             )
+
+            database.initialize()
+
+            self.assertIsNotNone(database.get_task(task_id))
+            self.assertEqual(database.get_setting("prompt"), "custom prompt")
+            self.assertEqual(database.get_setting("model_id"), "custom-model")
+            self.assertEqual(database.get_setting("video_fps"), "1.2")
+            self.assertEqual(database.cached_models(), ["custom-model"])
+            self.assertEqual(database.get_setting("csrf_secret"), previous_csrf)
+            self.assertEqual(source.read_bytes(), b"video")
+            self.assertEqual(output.read_text(encoding="utf-8"), "existing output")
+            self.assertEqual(output_video.read_bytes(), b"existing video")
+            self.assertEqual(api_key.read_text(encoding="utf-8"), "secret")
+            self.assertEqual(unrelated_data.read_bytes(), b"keep")
+            self.assertEqual(video_fixture.read_bytes(), b"video")
+            with database.connect() as connection:
+                version = int(
+                    connection.execute("PRAGMA user_version").fetchone()[0]
+                )
+            self.assertEqual(version, DATABASE_SCHEMA_VERSION)
+
+    def test_database_rejects_a_future_schema_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary))
+            database = create_db(config)
+            source = config.input_dir / "future.mp4"
+            source.write_bytes(b"future")
+            task_id = add_task(database, source)
+            with database.connect() as connection:
+                connection.execute(
+                    f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION + 1}"
+                )
+                connection.commit()
+            with self.assertRaisesRegex(RuntimeError, "拒绝降级"):
+                database.initialize()
+            self.assertIsNotNone(database.get_task(task_id))
 
     def test_remote_file_is_cleared_only_when_identifier_still_matches(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -617,12 +728,12 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             task_id = add_task(database, source)
             task = database.get_task(task_id)
             analysis = VideoAnalysis(
-                new_filename="恢复测试", content="内容", transcript=[]
+                title="恢复测试", content="内容", transcript=[]
             )
             video = config.output_dir / "恢复测试.mp4"
             markdown = config.output_dir / "恢复测试.md"
             markdown_text = render_markdown(
-                analysis, video.name, source.name
+                analysis, video.name, source.name, "2026-08-02"
             )
             proof = await stage_output_pair(
                 task_id=task_id,
@@ -636,6 +747,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                 task_id,
                 status="moving",
                 response_json=analysis.model_dump_json(),
+                markdown_created_date="2026-08-02",
                 video_output_path=str(video),
                 md_output_path=str(markdown),
                 video_sha256=proof.video_sha256,
@@ -649,6 +761,47 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             recover_quarantined_sources(config, database)
             self.assertFalse(quarantine.exists())
             self.assertFalse(source.exists())
+            self.assertEqual(database.get_task(task_id)["status"], "success")
+
+    async def test_moving_recovery_keeps_saved_date_and_actual_collision_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = make_config(Path(temporary))
+            database = create_db(config)
+            source = config.input_dir / "nested" / "source.mp4"
+            source.parent.mkdir()
+            source.write_bytes(b"video")
+            task_id = add_task(database, source)
+            analysis = VideoAnalysis(title="归档", content="内容", transcript=[])
+            existing_video = config.output_dir / "归档.mp4"
+            existing_markdown = config.output_dir / "归档.md"
+            existing_video.write_bytes(b"existing")
+            existing_markdown.write_text("existing", encoding="utf-8")
+            final_video = config.output_dir / "归档-2.mp4"
+            final_markdown = config.output_dir / "归档-2.md"
+            database.update_task(
+                task_id,
+                status="moving",
+                response_json=analysis.model_dump_json(),
+                markdown_created_date="2026-08-01",
+                final_stem="归档-2",
+                video_output_path=str(final_video),
+                md_output_path=str(final_markdown),
+            )
+
+            with patch(
+                "app.pipeline.current_markdown_date",
+                side_effect=AssertionError("恢复时不应重新生成日期"),
+            ):
+                await TaskProcessor(config, database).process(task_id)
+
+            rendered = final_markdown.read_text(encoding="utf-8")
+            self.assertIn('title: "归档"', rendered)
+            self.assertIn("created: 2026-08-01", rendered)
+            self.assertIn("![[归档-2.mp4]]", rendered)
+            self.assertEqual(existing_video.read_bytes(), b"existing")
+            self.assertEqual(
+                existing_markdown.read_text(encoding="utf-8"), "existing"
+            )
             self.assertEqual(database.get_task(task_id)["status"], "success")
 
     async def test_nested_quarantine_restores_source_when_outputs_are_missing(self):
@@ -679,7 +832,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             config = make_config(Path(temporary))
             database = create_db(config)
             analysis = VideoAnalysis(
-                new_filename="标题",
+                title="标题",
                 content="正确内容",
                 transcript=[],
             )
@@ -695,6 +848,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                 bad_task_id,
                 status="moving",
                 response_json=analysis.model_dump_json(),
+                markdown_created_date="2026-08-02",
                 video_output_path=str(bad_video),
                 md_output_path=str(bad_markdown),
             )
@@ -709,7 +863,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             good_video = config.output_dir / "标题.mp4"
             good_markdown = config.output_dir / "标题.md"
             markdown = render_markdown(
-                analysis, good_video.name, good_source.name
+                analysis, good_video.name, good_source.name, "2026-08-02"
             )
             proof = await stage_output_pair(
                 task_id=good_task_id,
@@ -723,6 +877,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                 good_task_id,
                 status="moving",
                 response_json=analysis.model_dump_json(),
+                markdown_created_date="2026-08-02",
                 video_output_path=str(good_video),
                 md_output_path=str(good_markdown),
                 video_sha256=proof.video_sha256,
@@ -778,7 +933,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
 
                 async def create_video_response(self, *_):
                     return (
-                        '{"new_filename":"归档_测试.mp4",'
+                        '{"title":"归档_测试.mp4",'
                         '"content":"内容","transcript":"语音","extra":true}'
                     )
 
@@ -812,6 +967,17 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                 config.output_dir / "归档测试.md"
             ).read_text(encoding="utf-8")
             self.assertIn("语音", markdown)
+            self.assertRegex(
+                str(finished["markdown_created_date"]),
+                r"^\d{4}-\d{2}-\d{2}$",
+            )
+            self.assertIn(
+                f"created: {finished['markdown_created_date']}", markdown
+            )
+            self.assertEqual(
+                set(json.loads(str(finished["response_json"]))),
+                {"title", "content", "transcript"},
+            )
 
     async def test_analysis_repairs_soft_drift_without_second_request(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -827,7 +993,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                     self.prompts.append(prompt)
                     return (
                         "```json\n"
-                        '{"new_filename":"桌面_工作台#CyboPal.mp4",'
+                        '{"title":"桌面_工作台#CyboPal.mp4",'
                         '"content":"内容","transcript":"语音","extra":true}'
                         "\n```"
                     )
@@ -836,7 +1002,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             analysis = await request_valid_analysis(
                 client, "file-1", "原提示词", "model-1"
             )
-            self.assertEqual(analysis.new_filename, "桌面工作台CyboPal")
+            self.assertEqual(analysis.title, "桌面工作台CyboPal")
             self.assertEqual(analysis.transcript, ["语音"])
             self.assertEqual(client.prompts, ["原提示词"])
 
@@ -848,11 +1014,11 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                     self.prompts: list[str] = []
                     self.responses = [
                         (
-                            '{"new_filename":"bad/path","content":"内容",'
+                            '{"new_filename":"旧字段","content":"内容",'
                             '"transcript":[]}'
                         ),
                         (
-                            '{"new_filename":"安全标题","content":"内容",'
+                            '{"title":"安全标题","content":"内容",'
                             '"transcript":[]}'
                         ),
                     ]
@@ -868,11 +1034,35 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             analysis = await request_valid_analysis(
                 client, "file-1", "原提示词", "model-1"
             )
-            self.assertEqual(analysis.new_filename, "安全标题")
+            self.assertEqual(analysis.title, "安全标题")
             self.assertEqual(client.prompts[0], "原提示词")
             self.assertIn("原提示词", client.prompts[1])
-            self.assertIn("new_filename", client.prompts[1])
+            self.assertNotIn("new_filename", client.prompts[1])
+            self.assertIn("旧版字段", client.prompts[1])
             self.assertIn("只返回一个合法 JSON 对象", client.prompts[1])
+
+    async def test_legacy_field_twice_fails_after_one_repair_request(self):
+        class FakeClient:
+            def __init__(self):
+                self.prompts: list[str] = []
+
+            async def create_video_response(
+                self, file_id: str, prompt: str, model: str
+            ) -> str:
+                del file_id, model
+                self.prompts.append(prompt)
+                return (
+                    '{"new_filename":"旧标题","content":"内容",'
+                    '"transcript":[]}'
+                )
+
+        client = FakeClient()
+        with self.assertRaisesRegex(ArkError, "连续两次"):
+            await request_valid_analysis(
+                client, "file-1", "原提示词", "model-1"
+            )
+        self.assertEqual(len(client.prompts), 2)
+        self.assertNotIn("new_filename", client.prompts[1])
 
     async def test_responses_payload_and_output_extraction(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -891,7 +1081,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                                 "content": [
                                     {
                                         "type": "output_text",
-                                        "text": '{"new_filename":"测试","content":"内容","transcript":[]}',
+                                        "text": '{"title":"测试","content":"内容","transcript":[]}',
                                     }
                                 ],
                             }
@@ -912,7 +1102,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(captured["max_output_tokens"], 32768)
             self.assertEqual(captured["thinking"], {"type": "disabled"})
             self.assertNotIn("duration", json.dumps(captured))
-            self.assertEqual(parse_model_json(text)["new_filename"], "测试")
+            self.assertEqual(parse_model_json(text)["title"], "测试")
 
     async def test_incomplete_response_fails_without_parsing(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1095,7 +1285,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
 
                 async def create_video_response(self, *_):
                     return (
-                        '{"new_filename":"重试清理","content":"内容",'
+                        '{"title":"重试清理","content":"内容",'
                         '"transcript":[]}'
                     )
 
@@ -1214,7 +1404,7 @@ class FileAndApiAsyncTests(unittest.IsolatedAsyncioTestCase):
                 ):
                     prompts.append(prompt)
                     return (
-                        '{"new_filename":"接口_测试.mp4",'
+                        '{"title":"接口_测试.mp4",'
                         '"content":"成功","transcript":"语音","extra":true}'
                     )
 

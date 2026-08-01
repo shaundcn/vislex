@@ -1,6 +1,6 @@
 services:
   vislex:
-    image: shaundcn/vislex:1.1.2
+    image: shaundcn/vislex:1.1.3
     ports:
       - "9602:9602"
     volumes:

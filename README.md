@@ -10,7 +10,7 @@ Markdown 平铺写入 `output`。
 公开镜像为 `docker.io/shaundcn/vislex`，支持 Linux amd64 和 arm64。Linux
 服务器可以只下载部署 YAML 运行，不需要克隆源码仓库。
 
-当前源码版本：`1.1.2`。Docker Hub 稳定版本：`1.1.2`。
+当前源码版本：`1.1.3`。Docker Hub 稳定版本：`1.1.3`。
 
 ## 技术与限制
 
@@ -46,8 +46,8 @@ Compose 使用以下固定挂载：
 ./data   → /app/data
 ```
 
-启动不会清空、迁移或覆盖这三个目录中的已有内容。`docker compose down` 也不要附加
-`-v`；这里使用的是绑定目录而不是命名卷。
+启动不会清空、迁移或覆盖这三个目录中的已有内容。`docker compose down`
+也不要附加 `-v`；这里使用的是绑定目录而不是命名卷。
 
 ## NAS 与 Linux YAML 安装
 
@@ -63,7 +63,7 @@ YAML 内容保持极简：
 ```yaml
 services:
   vislex:
-    image: shaundcn/vislex:1.1.2
+    image: shaundcn/vislex:1.1.3
     ports:
       - "9602:9602"
     volumes:
@@ -172,10 +172,11 @@ API Key 原子写入 `data/ark_api_key` 并设置为 `0600`。网页只展示首
 
 ## 自动处理
 
-源码 `1.1.2` 的扫描器每30秒检查 `input` 顶层及最多3层非隐藏子目录中的普通文件，
+源码 `1.1.3` 的扫描器每30秒检查 `input` 顶层及最多3层非隐藏子目录中的普通文件，
 例如会扫描 `input/一层/二层/三层/视频.mp4`，不会进入第4层子目录。文件大小和纳秒
 修改时间连续60秒不变后建立任务。隐藏文件、隐藏目录和符号链接不会被跟随；任务页和
-Markdown 中的“原文件名”对嵌套视频显示相对于 `input` 的路径，便于区分同名文件。
+任务页的“原文件”对嵌套视频显示相对于 `input` 的路径，便于区分
+同名文件；Markdown frontmatter 的 `source` 只保留最后的文件名和扩展名。
 
 状态依次为：
 
@@ -196,13 +197,15 @@ queued → checking → uploading → processing → moving → success
 
 网络错误、HTTP 429 和 5xx 在首次请求后最多重试3次。Files 预处理每3秒轮询一次，
 最长等待30分钟。模型结果会先进行安全规范化：允许整个响应由单个 JSON 代码块包裹；
-丢弃额外字段；移除 `new_filename` 中的普通标点、常见视频扩展名并截断至20字符；
+丢弃普通额外字段；移除 `title` 中的普通标点、常见视频扩展名并截断至20字符；
 把字符串形式的 `transcript` 转为单元素数组并清理空项。规范化后仍使用严格 Pydantic
 模型校验。
 
 路径分隔符、控制字符、重复 JSON 字段、多个 JSON、解释性前后文、缺失或空白
-`content` 不会被忽略。首次结果仍不合法时，第二次请求会附带具体校验错误；连续两次
-失败才标记任务失败。设置页“测试”与正式任务复用完全相同的规范化、校验和纠错逻辑。
+`content` 不会被忽略。旧字段 `new_filename` 无论单独出现还是与 `title` 同时出现，
+都不会被转换或忽略，而是触发一次模型纠错。首次结果仍不合法时，第二次请求会
+附带脱敏的校验错误；连续两次失败才标记任务失败。设置页“测试”与正式任务
+复用完全相同的规范化、校验和纠错逻辑。
 任何截断或 `incomplete` 响应直接失败。每个任务结束后会在5秒内尽力删除远程临时
 文件；清理失败不会阻塞后续任务，并会保留待清理标记供容器重启后再次尝试。
 
@@ -212,13 +215,13 @@ queued → checking → uploading → processing → moving → success
 
 ```json
 {
-  "new_filename": "新文件名",
+  "title": "新文件名",
   "content": "视频内容",
   "transcript": ["转写内容"]
 }
 ```
 
-`new_filename` 只能包含1至20个中文、英文字母或数字。输出保留安全的原视频扩展名；
+`title` 只能包含1至20个中文、英文字母或数字。输出保留安全的原视频扩展名；
 扩展名只允许最多10个英文字母或数字，空扩展名也可使用，`.md`、控制字符和 Markdown
 结构字符会被拒绝。重名时追加 `-2`、`-3`，并截断主体以确保总主体仍不超过20字符。
 
@@ -232,6 +235,22 @@ output/
 
 输出目录不创建子目录。模型文本会先进行 HTML 和 Markdown 转义，仅保留 `content`
 中行首的短横线列表。无语音时 Markdown 写入“无可转写语音。”。
+
+新生成 Markdown 的 frontmatter 固定为：
+
+```markdown
+---
+title: "模型返回的title"
+tags:
+source: "原文件.mp4"
+created: 2026-08-02
+---
+```
+
+`created` 使用 Asia/Shanghai 日期并在任务进入 `moving` 时写入 SQLite；
+中断恢复不会重新计算日期。重名产生 `-2` 时，`title` 仍是模型原标题，
+视频嵌入链接使用实际带后缀的文件名。已存在的 `output` 视频和 Markdown 不会被
+迁移或重写。
 
 任务页每页显示200项，并提供无 JavaScript 的上一页、下一页导航。
 成功任务可直接预览、下载视频或下载 Markdown。预览页在桌面端约按 70%/30%
@@ -249,6 +268,10 @@ SQLite 使用 WAL 和 `synchronous=FULL`。重启时，vislex：
 - 两个最终文件已经完成且源文件仍存在时，会逐字节核对输出后完成删除和状态收尾；
 - 源文件已经不存在时，只有视频和 Markdown 都与删除前保存的 SHA-256 一致才会标记成功；
 - 不修改任何已有成功输出。
+
+新的 `data` 目录会创建 `tasks` 和 `settings` 两张业务表，并设置
+`PRAGMA user_version=1`。初始化只使用“不存在则创建”和“不存在则写入默认设置”，
+不包含删表、清空任务或重置设置的逻辑；重复启动会保留已有内容。
 
 备份前建议停止新任务并复制整个 `data` 和 `output`：
 
@@ -270,14 +293,14 @@ docker compose -f compose.yaml pull
 docker compose -f compose.yaml up -d
 ```
 
-从 `1.1.1` 升级到 `1.1.2` 时，还要把端口映射两侧从 `8000` 同时改为 `9602`。
-升级或回滚时，编辑 `compose.yaml` 的镜像标签并重新创建容器。上一稳定版本为
-`shaundcn/vislex:1.1.1`：
+`1.1.3` 继续使用 `9602`。从 `1.1.2` 升级只需修改镜像标签并重新
+创建容器；如果从 `1.1.1` 升级，还要把端口映射两侧从 `8000` 同时改为
+`9602`。上一稳定版本为 `shaundcn/vislex:1.1.2`：
 
 ```yaml
 services:
   vislex:
-    image: shaundcn/vislex:1.1.1
+    image: shaundcn/vislex:1.1.2
 ```
 
 停止并删除容器但保留视频、Markdown、数据库和设置：
@@ -331,15 +354,20 @@ zsh -lc 'docker run --rm -v "$PWD:/workspace:ro" -w /workspace vislex:local pyth
 zsh -lc 'docker compose config'
 sh -n deploy/install.sh
 docker compose -f deploy/compose.yaml config
-zsh -lc 'docker compose up -d'
-zsh -lc 'docker compose ps'
-set -a
-[ ! -f .env ] || . ./.env
-set +a
-VISLEX_URL="http://${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-9602}"
-curl --fail --silent --show-error "${VISLEX_URL}/healthz"
-curl --fail --silent --show-error "${VISLEX_URL}/" >/dev/null
-curl --fail --silent --show-error "${VISLEX_URL}/settings" >/dev/null
+VISLEX_VERIFY_DIR="$(mktemp -d)"
+mkdir -p "${VISLEX_VERIFY_DIR}/input" "${VISLEX_VERIFY_DIR}/output" \
+  "${VISLEX_VERIFY_DIR}/data"
+docker run --rm -d --name vislex-verify-113 \
+  -p 127.0.0.1:19602:9602 \
+  -v "${VISLEX_VERIFY_DIR}/input:/app/input" \
+  -v "${VISLEX_VERIFY_DIR}/output:/app/output" \
+  -v "${VISLEX_VERIFY_DIR}/data:/app/data" \
+  vislex:local
+curl --retry 10 --retry-delay 1 --retry-connrefused \
+  --fail --silent --show-error http://127.0.0.1:19602/healthz
+curl --fail --silent --show-error http://127.0.0.1:19602/ >/dev/null
+curl --fail --silent --show-error http://127.0.0.1:19602/settings >/dev/null
+docker stop vislex-verify-113
 ```
 
 ## 常见问题
