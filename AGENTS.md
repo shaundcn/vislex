@@ -30,13 +30,14 @@
 
 ## 当前状态与下一步
 
-- 截至 2026-08-01，当前源码目标版本为 `1.1.1`；移除了 Host 校验，公开 NAS YAML
-  使用相同的内外8000端口和中文相对目录。本地编译、62项测试、8000/9090容器验证
-  已通过；SQLite 架构未修改，真实方舟 API 未调用。
-- GitHub 公开仓库为 `shaundcn/vislex`；远端当前稳定发布仍为 `v1.1.0`，`v1.1.1`
-  等待本次发布验证完成后更新此状态。
-- Docker Hub 当前稳定镜像仍为 `shaundcn/vislex:1.1.0` 与 `latest`；二者包含
-  `linux/amd64` 和 `linux/arm64`。
+- 截至 2026-08-01，当前稳定版本为 `1.1.1`；移除了 Host 校验，公开 NAS YAML使用
+  相同的内外8000端口和中文相对目录。编译、62项测试、8000/9090容器验证和公开
+  RAW无克隆安装均已通过；SQLite架构未修改，真实方舟API未调用。
+- GitHub 公开仓库为 `shaundcn/vislex`；实现提交为 `6ed8663`，发布标签为
+  `v1.1.1`，main与标签工作流均成功。
+- Docker Hub 的 `shaundcn/vislex:1.1.1` 与 `latest` 共享 manifest digest
+  `sha256:cdd8fda977c5d471696efaa4d470c1cacdc254854a458cfafa13d4a102428d3f`，包含
+  `linux/amd64` 和 `linux/arm64`；两种架构均已匿名拉取并通过 `/healthz`。
 - 在线安装入口和镜像式 Compose 位于 `deploy/`；新安装创建中文目录，已有 Compose、
   `.env` 和旧英文数据目录保持原样。
 - 后续修改先运行 README 中的验证，再按用户明确要求提交或推送。
